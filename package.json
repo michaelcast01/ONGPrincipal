@@ -1,0 +1,19 @@
+{
+  "name": "conjunto-ong",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Aplicativo full-stack unificado para administrar y consultar operaciones de una ONG.",
+  "scripts": {
+    "dev": "concurrently \"npm run dev --prefix backend\" \"npm run dev --prefix frontend\"",
+    "start": "npm run start --prefix backend",
+    "seed": "node database/seed.js",
+    "install:all": "npm install && npm --prefix backend install && npm --prefix frontend install"
+  },
+  "dependencies": {
+    "dotenv": "^16.4.7",
+    "pg": "^8.13.1"
+  },
+  "devDependencies": {
+    "concurrently": "^9.1.2"
+  }
+}

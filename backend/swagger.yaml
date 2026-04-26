@@ -1,0 +1,98 @@
+openapi: 3.0.3
+info:
+  title: Conjunto ONG API
+  version: 1.0.0
+  description: API unificada para ayudas sociales y operaciones ONG.
+servers:
+  - url: http://localhost:3100
+paths:
+  /api/health:
+    get:
+      summary: Estado de API y base de datos
+      responses:
+        '200':
+          description: Servicio disponible
+  /api/auth/login:
+    post:
+      summary: Login JWT
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                usuario:
+                  type: string
+                contrasena:
+                  type: string
+      responses:
+        '200':
+          description: Token emitido
+  /api/dashboard/summary:
+    get:
+      summary: Metricas, ranking de ciudades y entregas recientes
+      responses:
+        '200':
+          description: Resumen operativo
+  /api/beneficiarios:
+    get:
+      summary: Lista beneficiarios integrados
+      parameters:
+        - in: query
+          name: q
+          schema:
+            type: string
+        - in: query
+          name: cityId
+          schema:
+            type: string
+        - in: query
+          name: populationTypeId
+          schema:
+            type: string
+        - in: query
+          name: helpTypeId
+          schema:
+            type: string
+      responses:
+        '200':
+          description: Resultados
+    post:
+      summary: Crea beneficiario en modulo ayudas sociales
+      security:
+        - bearerAuth: []
+      responses:
+        '201':
+          description: Creado
+  /api/entregas:
+    get:
+      summary: Lista entregas integradas
+      responses:
+        '200':
+          description: Resultados
+    post:
+      summary: Crea entrega en modulo ayudas sociales
+      security:
+        - bearerAuth: []
+      responses:
+        '201':
+          description: Creada
+  /api/records/{table}:
+    get:
+      summary: Consulta tabla operativa permitida
+      parameters:
+        - in: path
+          name: table
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: Registros
+components:
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT

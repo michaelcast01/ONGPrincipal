@@ -9,6 +9,8 @@ const SOURCES = {
   }
 };
 
+const serviceTokenCache = new Map();
+
 export class ExternalApiError extends Error {
   constructor(message, details = {}) {
     super(message);
@@ -61,6 +63,35 @@ export function configuredSources() {
 
 export function getSourceToken(req, source) {
   return req.user?.externalTokens?.[source] || null;
+}
+
+export async function getServiceToken(source) {
+  const cached = serviceTokenCache.get(source);
+  if (cached?.expiresAt > Date.now()) return cached.token;
+
+  const usuario = process.env.ADMIN_USER || 'admin';
+  const contrasena = process.env.ADMIN_PASSWORD || 'admin123';
+  const payload = await requestExternal(source, '/auth/login', {
+    method: 'POST',
+    body: {
+      usuario,
+      username: usuario,
+      contrasena,
+      contraseña: contrasena,
+      password: contrasena
+    }
+  });
+
+  if (!payload?.token) {
+    throw new ExternalApiError(`No se pudo obtener token de ${sourceLabel(source)}`, { source, status: 401 });
+  }
+
+  serviceTokenCache.set(source, {
+    token: payload.token,
+    expiresAt: Date.now() + 15 * 60 * 1000
+  });
+
+  return payload.token;
 }
 
 export function sourceOrder(primary = 'old') {

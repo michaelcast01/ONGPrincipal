@@ -42,7 +42,7 @@ async function readNewRecords(req, table, normalizer) {
 
   const payload = await requestExternal('new', `/records/${table}`, {
     token,
-    query: { page: 1, pageSize: 500, sortField: 'id', sortDirection: 'ASC' }
+    query: { page: 1, pageSize: 1000, sortField: 'id', sortDirection: 'ASC' }
   });
 
   return newListPayload(payload).data.map(normalizer);
@@ -50,10 +50,32 @@ async function readNewRecords(req, table, normalizer) {
 
 async function readNewCiudades(req) {
   const unique = new Map();
-  const rows = await readNewRecords(req, 'direccion_ubicacion', normalizeNewCiudad);
-  rows.forEach((city) => {
-    if (city.nombre) unique.set(`${city.region}:${city.nombre}`, city);
-  });
+
+  try {
+    const rows = await readNewRecords(req, 'beneficiario', (row = {}) => {
+      const nombre = row.ciudad || row.municipio || '';
+      return {
+        id: externalId('new', nombre),
+        raw_id: nombre,
+        nombre,
+        region: row.departamento || row.region || '',
+        origen: 'ong_operativa'
+      };
+    });
+    rows.forEach((city) => {
+      if (city.nombre) unique.set(`${city.region}:${city.nombre}`, city);
+    });
+  } catch (_error) {
+    // Si beneficiario no expone ciudad, se usa direccion_ubicacion como respaldo.
+  }
+
+  if (unique.size === 0) {
+    const rows = await readNewRecords(req, 'direccion_ubicacion', normalizeNewCiudad);
+    rows.forEach((city) => {
+      if (city.nombre) unique.set(`${city.region}:${city.nombre}`, city);
+    });
+  }
+
   return [...unique.values()];
 }
 

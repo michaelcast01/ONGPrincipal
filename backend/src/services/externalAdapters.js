@@ -71,23 +71,23 @@ export function normalizeOldBeneficiario(row = {}) {
 export function normalizeNewBeneficiario(row = {}) {
   const id = row.id ?? row.id_beneficiario;
   const apellidos = compactName([row.primer_apellido, row.segundo_apellido]) || row.apellidos || '';
-  const nombre = row.nombre_completo || compactName([
+  const nombres = compactName([
     row.primer_nombre,
-    row.segundo_nombre,
-    row.primer_apellido,
-    row.segundo_apellido
-  ]) || compactName([row.nombres, row.apellidos]) || row.nombre || '';
+    row.segundo_nombre
+  ]) || row.nombres || row.nombre || row.nombre_completo || '';
 
   return {
     id: externalId('new', id),
     id_beneficiario: id,
-    nombre_completo: nombre,
+    nombre_completo: nombres,
     apellidos,
     documento: row.numero_documento || row.documento || row.cedula || '',
     telefono: row.telefono || row.celular || '',
     correo: row.correo || row.correo_electronico || '',
-    ciudad: row.municipio || row.ciudad || '',
+    ciudad: row.ciudad || row.municipio || '',
     region: row.departamento || row.region || '',
+    grupo_sisben: row.grupo_sisben || row.sisben || '',
+    fecha_registro: row.fecha_registro || row.created_at || '',
     origen: 'ong_operativa'
   };
 }

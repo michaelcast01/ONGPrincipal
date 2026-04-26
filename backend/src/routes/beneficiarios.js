@@ -10,7 +10,7 @@ import {
   rawExternalId,
   toOldBeneficiarioBody
 } from '../services/externalAdapters.js';
-import { getSourceToken, preferredSource, requestExternal, sourceOrder } from '../services/externalApi.js';
+import { getServiceToken, getSourceToken, preferredSource, requestExternal, sourceOrder } from '../services/externalApi.js';
 
 const router = Router();
 
@@ -42,42 +42,199 @@ function hasResults(list) {
   return (list.data || []).length > 0 && Number(list.total || list.data.length || 0) > 0;
 }
 
-async function requestNewBeneficiarios(req, limit) {
-  const token = getSourceToken(req, 'new');
-  if (!token) throw new Error('Token de la API nueva no disponible');
+const NEW_SCHEMA_TTL_MS = 5 * 60 * 1000;
+const DEFAULT_NEW_FIELDS = [
+  'id',
+  'tipo_documento',
+  'numero_documento',
+  'primer_nombre',
+  'segundo_nombre',
+  'apellidos',
+  'primer_apellido',
+  'segundo_apellido',
+  'telefono',
+  'correo',
+  'ciudad',
+  'grupo_sisben',
+  'fecha_registro'
+];
+let newBeneficiarioSchemaCache = { expiresAt: 0, schema: null };
 
-  if (req.query.q) {
-    try {
-      return await requestExternal('new', '/search/execute', {
-        method: 'POST',
-        token,
-        query: { page: 1, pageSize: limit },
-        body: {
-          primaryTable: 'beneficiario',
-          filters: [{ field: 'primer_nombre', operator: 'ILIKE', value: req.query.q }],
-          fields: [
-            'id',
-            'tipo_documento',
-            'numero_documento',
-            'primer_nombre',
-            'segundo_nombre',
-            'primer_apellido',
-            'segundo_apellido',
-            'telefono',
-            'correo'
-          ],
-          orderBy: [{ field: 'id', direction: 'ASC' }]
-        }
-      });
-    } catch (_error) {
-      // Si search no conoce algun campo, se intenta records como respaldo de la misma API nueva.
-    }
+function normalizeColumns(columns = []) {
+  return columns
+    .map((column) => (typeof column === 'string' ? { name: column } : column))
+    .filter((column) => column?.name);
+}
+
+function buildSchemaFromEntity(entity = {}) {
+  const columns = normalizeColumns(entity.columns || []);
+  const columnNames = new Set(columns.map((column) => column.name));
+  return {
+    columns,
+    columnNames,
+    listFields: (entity.listFields || DEFAULT_NEW_FIELDS).filter((field) => columnNames.size === 0 || columnNames.has(field)),
+    searchFields: (entity.searchFields || []).filter((field) => columnNames.size === 0 || columnNames.has(field))
+  };
+}
+
+async function getNewBeneficiarioSchema(token) {
+  if (newBeneficiarioSchemaCache.schema && newBeneficiarioSchemaCache.expiresAt > Date.now()) {
+    return newBeneficiarioSchemaCache.schema;
   }
 
-  return requestExternal('new', '/records/beneficiario', {
+  try {
+    const meta = await requestExternal('new', '/meta/app', { token });
+    const entity = (meta.entities || []).find((item) => item.name === 'beneficiario' || item.key === 'beneficiario');
+    if (entity) {
+      const schema = buildSchemaFromEntity(entity);
+      newBeneficiarioSchemaCache = { expiresAt: Date.now() + NEW_SCHEMA_TTL_MS, schema };
+      return schema;
+    }
+  } catch (_error) {
+    // Si metadata falla, se intenta el endpoint puntual de columnas.
+  }
+
+  try {
+    const payload = await requestExternal('new', '/search/table/beneficiario/columns', { token });
+    const columns = normalizeColumns(payload.columns || []);
+    const columnNames = new Set(columns.map((column) => column.name));
+    const schema = {
+      columns,
+      columnNames,
+      listFields: DEFAULT_NEW_FIELDS.filter((field) => columnNames.has(field)),
+      searchFields: []
+    };
+    newBeneficiarioSchemaCache = { expiresAt: Date.now() + NEW_SCHEMA_TTL_MS, schema };
+    return schema;
+  } catch (_error) {
+    const columnNames = new Set(DEFAULT_NEW_FIELDS);
+    return { columns: DEFAULT_NEW_FIELDS.map((name) => ({ name })), columnNames, listFields: DEFAULT_NEW_FIELDS, searchFields: [] };
+  }
+}
+
+function existingFields(schema, fields) {
+  if (!schema.columnNames || schema.columnNames.size === 0) return fields;
+  return fields.filter((field) => schema.columnNames.has(field));
+}
+
+function fieldsForNewBeneficiario(schema) {
+  const fields = existingFields(schema, [...new Set([...(schema.listFields || []), ...DEFAULT_NEW_FIELDS])]);
+  return fields.length > 0 ? fields : DEFAULT_NEW_FIELDS;
+}
+
+function searchFieldsForNewBeneficiario(schema) {
+  const preferred = [
+    ...(schema.searchFields || []),
+    'primer_nombre',
+    'segundo_nombre',
+    'apellidos',
+    'primer_apellido',
+    'segundo_apellido',
+    'numero_documento',
+    'tipo_documento',
+    'correo',
+    'telefono',
+    'ciudad',
+    'grupo_sisben'
+  ];
+
+  return [...new Set(existingFields(schema, preferred))];
+}
+
+function payloadFromRows(rows) {
+  return { data: rows, pagination: { total: rows.length } };
+}
+
+function newCityFilterValue(value) {
+  const raw = rawExternalId(value);
+  if (!raw) return '';
+  return /^\d+$/.test(String(raw)) ? '' : String(raw);
+}
+
+function locallyMatches(row, q) {
+  const text = String(q || '').trim().toLowerCase();
+  if (!text) return true;
+  return Object.values(row || {}).some((value) => String(value || '').toLowerCase().includes(text));
+}
+
+async function searchNewByCity(req, token, schema, limit) {
+  const city = newCityFilterValue(req.query.cityId);
+  if (!city || !schema.columnNames.has('ciudad')) return null;
+
+  const payload = await requestExternal('new', '/search/execute', {
+    method: 'POST',
+    token,
+    query: { page: 1, pageSize: 1000 },
+    body: {
+      primaryTable: 'beneficiario',
+      filters: [{ field: 'ciudad', operator: '=', value: city }],
+      fields: fieldsForNewBeneficiario(schema),
+      orderBy: schema.columnNames.has('id') ? [{ field: 'id', direction: 'ASC' }] : []
+    }
+  });
+
+  const rows = newListPayload(payload).data.filter((row) => locallyMatches(row, req.query.q));
+  return payloadFromRows(rows.slice(0, limit));
+}
+
+async function searchNewByKnownFields(req, token, schema, limit) {
+  if (!req.query.q) return payloadFromRows([]);
+
+  const fields = searchFieldsForNewBeneficiario(schema).slice(0, 10);
+  const selectedFields = fieldsForNewBeneficiario(schema);
+  const results = await Promise.allSettled(fields.map((field) => requestExternal('new', '/search/execute', {
+    method: 'POST',
+    token,
+    query: { page: 1, pageSize: limit },
+    body: {
+      primaryTable: 'beneficiario',
+      filters: [{ field, operator: 'ILIKE', value: req.query.q }],
+      fields: selectedFields,
+      orderBy: schema.columnNames.has('id') ? [{ field: 'id', direction: 'ASC' }] : []
+    }
+  })));
+
+  const unique = new Map();
+  results.forEach((result) => {
+    if (result.status !== 'fulfilled') return;
+    newListPayload(result.value).data.forEach((row) => {
+      const key = row.id ?? row.numero_documento ?? JSON.stringify(row);
+      unique.set(String(key), row);
+    });
+  });
+
+  return payloadFromRows([...unique.values()].slice(0, limit));
+}
+
+async function requestNewBeneficiariosWithToken(req, limit, token) {
+  if (newCityFilterValue(req.query.cityId)) {
+    const schema = await getNewBeneficiarioSchema(token);
+    const cityPayload = await searchNewByCity(req, token, schema, limit);
+    if (cityPayload) return cityPayload;
+  }
+
+  const recordsPayload = await requestExternal('new', '/records/beneficiario', {
     token,
     query: { page: 1, pageSize: limit, q: req.query.q, sortField: 'id', sortDirection: 'ASC' }
   });
+
+  const list = newListPayload(recordsPayload);
+  if (hasResults(list) || !req.query.q) return recordsPayload;
+
+  const schema = await getNewBeneficiarioSchema(token);
+  return searchNewByKnownFields(req, token, schema, limit);
+}
+
+async function requestNewBeneficiarios(req, limit) {
+  const userToken = getSourceToken(req, 'new');
+  const token = userToken || await getServiceToken('new');
+
+  try {
+    return await requestNewBeneficiariosWithToken(req, limit, token);
+  } catch (error) {
+    if (!userToken || ![401, 403].includes(Number(error.status))) throw error;
+    return requestNewBeneficiariosWithToken(req, limit, await getServiceToken('new'));
+  }
 }
 
 router.get('/', async (req, res, next) => {
@@ -90,6 +247,7 @@ router.get('/', async (req, res, next) => {
     let usedSource = null;
     let fallbackReason = null;
     let emptyResult = null;
+    const attempts = [];
 
     for (const source of sourcesForRequest(req, primary)) {
       if (source === 'old') {
@@ -98,6 +256,7 @@ router.get('/', async (req, res, next) => {
           const list = oldListPayload(payload);
           if (!hasResults(list)) {
             emptyResult = { source, rows: [], total: 0 };
+            attempts.push({ source, ok: true, total: 0 });
             if (source === primary) fallbackReason = 'empty_results';
             continue;
           }
@@ -105,9 +264,11 @@ router.get('/', async (req, res, next) => {
           rows = list.data.map(normalizeOldBeneficiario);
           total = list.total;
           usedSource = source;
+          attempts.push({ source, ok: true, total });
           break;
         } catch (error) {
           lastError = error;
+          attempts.push({ source, ok: false, status: error.status, error: error.message });
           if (source === primary) fallbackReason = 'primary_error';
         }
       }
@@ -118,6 +279,7 @@ router.get('/', async (req, res, next) => {
           const list = newListPayload(payload);
           if (!hasResults(list)) {
             emptyResult = { source, rows: [], total: 0 };
+            attempts.push({ source, ok: true, total: 0 });
             if (source === primary) fallbackReason = 'empty_results';
             continue;
           }
@@ -125,9 +287,11 @@ router.get('/', async (req, res, next) => {
           rows = list.data.map(normalizeNewBeneficiario);
           total = list.total;
           usedSource = source;
+          attempts.push({ source, ok: true, total });
           break;
         } catch (error) {
           lastError = error;
+          attempts.push({ source, ok: false, status: error.status, error: error.message });
           if (source === primary) fallbackReason = 'primary_error';
         }
       }
@@ -142,7 +306,8 @@ router.get('/', async (req, res, next) => {
       source,
       requestedSource: primary,
       fallbackUsed: source !== primary,
-      fallbackReason: source !== primary ? fallbackReason : null
+      fallbackReason: source !== primary ? fallbackReason : null,
+      attempts
     });
   } catch (error) {
     next(error);

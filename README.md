@@ -45,9 +45,9 @@ npm run dev
 
 Servicios esperados:
 
-- Backend: `http://localhost:3100`
-- Frontend: `http://localhost:5173`
-- Swagger: `http://localhost:3100/api/docs`
+- Backend: `http://localhost:3002`
+- Frontend: `http://localhost:5175`
+- Swagger: `http://localhost:3002/api/docs`
 
 ## Usuarios iniciales
 
@@ -64,6 +64,15 @@ Cuando conectes la base real y ejecutes `npm run seed`, puedes dejarlo activo o 
 
 ```env
 DEMO_FALLBACK=false
+```
+
+## APIs externas
+
+Si vas a conectar este aplicativo con los backends existentes, agrega estas variables en `backend/.env`:
+
+```env
+ONG_ANTIGUA_API_URL=http://localhost:3000/api
+ONG_NUEVA_API_URL=http://localhost:3001/api
 ```
 
 ## Integracion de datos

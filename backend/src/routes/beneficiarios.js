@@ -53,6 +53,7 @@ const DEFAULT_NEW_FIELDS = [
   'primer_apellido',
   'segundo_apellido',
   'telefono',
+  'telefono_principal',
   'correo',
   'ciudad',
   'grupo_sisben',
@@ -134,6 +135,7 @@ function searchFieldsForNewBeneficiario(schema) {
     'tipo_documento',
     'correo',
     'telefono',
+    'telefono_principal',
     'ciudad',
     'grupo_sisben'
   ];

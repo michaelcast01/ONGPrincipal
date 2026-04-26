@@ -82,7 +82,7 @@ export function normalizeNewBeneficiario(row = {}) {
     nombre_completo: nombres,
     apellidos,
     documento: row.numero_documento || row.documento || row.cedula || '',
-    telefono: row.telefono || row.celular || '',
+    telefono: row.telefono || row.telefono_principal || row.celular || '',
     correo: row.correo || row.correo_electronico || '',
     ciudad: row.ciudad || row.municipio || '',
     region: row.departamento || row.region || '',

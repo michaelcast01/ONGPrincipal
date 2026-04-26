@@ -35,10 +35,16 @@ function addNewDashboard(summary, payload = {}) {
   }
 }
 
+function hasUsefulSummary(summary) {
+  return Object.values(summary).some((value) => Number(value || 0) > 0);
+}
+
 router.get('/summary', async (req, res, next) => {
   try {
     let lastError = null;
     const primary = preferredSource(req);
+    let emptyResult = null;
+    let fallbackReason = null;
 
     for (const source of sourceOrder(primary)) {
       const summary = emptySummary();
@@ -61,9 +67,24 @@ router.get('/summary', async (req, res, next) => {
             // El resumen puede mostrarse aunque fallen las entregas recientes.
           }
 
-          return res.json({ summary, topCities, recentDeliveries, source });
+          if (!hasUsefulSummary(summary)) {
+            emptyResult = { source, summary, topCities, recentDeliveries };
+            if (source === primary) fallbackReason = 'empty_results';
+            continue;
+          }
+
+          return res.json({
+            summary,
+            topCities,
+            recentDeliveries,
+            source,
+            requestedSource: primary,
+            fallbackUsed: source !== primary,
+            fallbackReason: source !== primary ? fallbackReason : null
+          });
         } catch (error) {
           lastError = error;
+          if (source === primary) fallbackReason = 'primary_error';
         }
       }
 
@@ -72,11 +93,38 @@ router.get('/summary', async (req, res, next) => {
         try {
           const payload = await requestExternal('new', '/meta/app', { token: newToken });
           addNewDashboard(summary, payload);
-          return res.json({ summary, topCities, recentDeliveries, source });
+          if (!hasUsefulSummary(summary)) {
+            emptyResult = { source, summary, topCities, recentDeliveries };
+            if (source === primary) fallbackReason = 'empty_results';
+            continue;
+          }
+
+          return res.json({
+            summary,
+            topCities,
+            recentDeliveries,
+            source,
+            requestedSource: primary,
+            fallbackUsed: source !== primary,
+            fallbackReason: source !== primary ? fallbackReason : null
+          });
         } catch (error) {
           lastError = error;
+          if (source === primary) fallbackReason = 'primary_error';
         }
       }
+    }
+
+    if (emptyResult) {
+      return res.json({
+        summary: emptyResult.summary,
+        topCities: emptyResult.topCities,
+        recentDeliveries: emptyResult.recentDeliveries,
+        source: emptyResult.source,
+        requestedSource: primary,
+        fallbackUsed: emptyResult.source !== primary,
+        fallbackReason: emptyResult.source !== primary ? fallbackReason : null
+      });
     }
 
     throw lastError || new Error('No hay fuente disponible para dashboard');

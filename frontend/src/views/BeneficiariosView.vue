@@ -7,6 +7,7 @@ const total = ref(0);
 const error = ref('');
 const saving = ref(false);
 const activeSource = ref('');
+const fallbackUsed = ref(false);
 const filters = ref({ q: '', cityId: '', populationTypeId: '', source: '' });
 const catalogos = ref({ ciudades: [], tiposPoblacion: [] });
 const form = ref({ documento: '', nombres: '', apellidos: '', telefono: '', correo: '', id_municipio: '', id_tipo_poblacion: '' });
@@ -26,6 +27,7 @@ async function loadRows() {
     rows.value = data.rows || [];
     total.value = data.total || 0;
     activeSource.value = data.source || '';
+    fallbackUsed.value = Boolean(data.fallbackUsed);
   } catch (err) {
     error.value = err.message;
   }
@@ -91,6 +93,7 @@ onMounted(async () => {
         <span class="muted">
           {{ total }} registros
           <template v-if="activeSource"> · usando {{ activeSource === 'new' ? 'Nueva' : 'Antigua' }}</template>
+          <template v-if="fallbackUsed"> · respaldo</template>
         </span>
       </div>
       <div class="filter-grid">
@@ -116,6 +119,7 @@ onMounted(async () => {
           <thead>
             <tr>
               <th>Nombre</th>
+              <th>Apellidos</th>
               <th>Documento</th>
               <th>Telefono</th>
               <th>Ciudad</th>
@@ -125,6 +129,7 @@ onMounted(async () => {
           <tbody>
             <tr v-for="row in rows" :key="row.id">
               <td>{{ row.nombre_completo }}</td>
+              <td>{{ row.apellidos }}</td>
               <td>{{ row.documento }}</td>
               <td>{{ row.telefono }}</td>
               <td>{{ row.ciudad }}</td>

@@ -34,51 +34,116 @@ function sourceFromOrigin(value, fallback) {
   return fallback;
 }
 
+function sourcesForRequest(req, primary) {
+  return req.query.source ? [primary] : sourceOrder(primary);
+}
+
+function hasResults(list) {
+  return (list.data || []).length > 0 && Number(list.total || list.data.length || 0) > 0;
+}
+
+async function requestNewBeneficiarios(req, limit) {
+  const token = getSourceToken(req, 'new');
+  if (!token) throw new Error('Token de la API nueva no disponible');
+
+  if (req.query.q) {
+    try {
+      return await requestExternal('new', '/search/execute', {
+        method: 'POST',
+        token,
+        query: { page: 1, pageSize: limit },
+        body: {
+          primaryTable: 'beneficiario',
+          filters: [{ field: 'primer_nombre', operator: 'ILIKE', value: req.query.q }],
+          fields: [
+            'id',
+            'tipo_documento',
+            'numero_documento',
+            'primer_nombre',
+            'segundo_nombre',
+            'primer_apellido',
+            'segundo_apellido',
+            'telefono',
+            'correo'
+          ],
+          orderBy: [{ field: 'id', direction: 'ASC' }]
+        }
+      });
+    } catch (_error) {
+      // Si search no conoce algun campo, se intenta records como respaldo de la misma API nueva.
+    }
+  }
+
+  return requestExternal('new', '/records/beneficiario', {
+    token,
+    query: { page: 1, pageSize: limit, q: req.query.q, sortField: 'id', sortDirection: 'ASC' }
+  });
+}
+
 router.get('/', async (req, res, next) => {
   try {
     const { limit } = paginationFromQuery(req.query);
-    const rows = [];
+    let rows = [];
     let total = 0;
     let lastError = null;
     const primary = sourceFromOrigin(req.query.source, preferredSource(req));
+    let usedSource = null;
+    let fallbackReason = null;
+    let emptyResult = null;
 
-    for (const source of sourceOrder(primary)) {
+    for (const source of sourcesForRequest(req, primary)) {
       if (source === 'old') {
         try {
           const payload = await requestExternal('old', '/beneficiarios', { query: oldQuery(req.query) });
           const list = oldListPayload(payload);
-          rows.push(...list.data.map(normalizeOldBeneficiario));
-          total += list.total;
+          if (!hasResults(list)) {
+            emptyResult = { source, rows: [], total: 0 };
+            if (source === primary) fallbackReason = 'empty_results';
+            continue;
+          }
+
+          rows = list.data.map(normalizeOldBeneficiario);
+          total = list.total;
+          usedSource = source;
           break;
         } catch (error) {
           lastError = error;
+          if (source === primary) fallbackReason = 'primary_error';
         }
       }
 
       if (source === 'new') {
-        const token = getSourceToken(req, 'new');
-        if (token) {
-          try {
-            const payload = await requestExternal('new', '/records/beneficiario', {
-              token,
-              query: { page: 1, pageSize: limit, q: req.query.q, sortField: 'id', sortDirection: 'ASC' }
-            });
-            const list = newListPayload(payload);
-            rows.push(...list.data.map(normalizeNewBeneficiario));
-            total += list.total;
-            break;
-          } catch (error) {
-            lastError = error;
+        try {
+          const payload = await requestNewBeneficiarios(req, limit);
+          const list = newListPayload(payload);
+          if (!hasResults(list)) {
+            emptyResult = { source, rows: [], total: 0 };
+            if (source === primary) fallbackReason = 'empty_results';
+            continue;
           }
-        } else {
-          lastError = new Error('Token de la API nueva no disponible');
+
+          rows = list.data.map(normalizeNewBeneficiario);
+          total = list.total;
+          usedSource = source;
+          break;
+        } catch (error) {
+          lastError = error;
+          if (source === primary) fallbackReason = 'primary_error';
         }
       }
     }
 
     const filtered = filterBySource(rows, req.query.source);
-    if (filtered.length === 0 && total === 0 && lastError) throw lastError;
-    res.json({ rows: filtered, total: total || filtered.length, source: primary });
+    if (filtered.length === 0 && total === 0 && lastError && !emptyResult) throw lastError;
+    const source = usedSource || emptyResult?.source || primary;
+    res.json({
+      rows: filtered,
+      total: total || filtered.length,
+      source,
+      requestedSource: primary,
+      fallbackUsed: source !== primary,
+      fallbackReason: source !== primary ? fallbackReason : null
+    });
   } catch (error) {
     next(error);
   }

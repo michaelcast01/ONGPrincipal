@@ -47,10 +47,12 @@ export function newListPayload(payload) {
 
 export function normalizeOldBeneficiario(row = {}) {
   const id = row.id_beneficiario ?? row.id;
+  const parts = String(row.nombres || row.nombre_completo || row.nombre || '').trim().split(/\s+/).filter(Boolean);
   return {
     id: externalId('old', id),
     id_beneficiario: id,
     nombre_completo: row.nombres || row.nombre_completo || row.nombre || '',
+    apellidos: row.apellidos || (parts.length > 1 ? parts.at(-1) : ''),
     documento: row.documento || row.numero_documento || '',
     telefono: row.telefono || '',
     correo: row.correo || '',
@@ -68,6 +70,7 @@ export function normalizeOldBeneficiario(row = {}) {
 
 export function normalizeNewBeneficiario(row = {}) {
   const id = row.id ?? row.id_beneficiario;
+  const apellidos = compactName([row.primer_apellido, row.segundo_apellido]) || row.apellidos || '';
   const nombre = row.nombre_completo || compactName([
     row.primer_nombre,
     row.segundo_nombre,
@@ -79,6 +82,7 @@ export function normalizeNewBeneficiario(row = {}) {
     id: externalId('new', id),
     id_beneficiario: id,
     nombre_completo: nombre,
+    apellidos,
     documento: row.numero_documento || row.documento || row.cedula || '',
     telefono: row.telefono || row.celular || '',
     correo: row.correo || row.correo_electronico || '',

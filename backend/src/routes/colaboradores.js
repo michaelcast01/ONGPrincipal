@@ -26,24 +26,48 @@ function normalizeUsuario(row = {}) {
   };
 }
 
+function hasResults(list) {
+  return (list.data || []).length > 0 && Number(list.total || list.data.length || 0) > 0;
+}
+
 router.get('/', async (req, res, next) => {
   try {
     let lastError = null;
+    const primary = preferredSource(req);
+    let emptyResult = null;
+    let fallbackReason = null;
 
-    for (const source of sourceOrder(preferredSource(req))) {
+    for (const source of sourceOrder(primary)) {
       if (source === 'old') {
         try {
           const payload = await requestExternal('old', '/colaboradores', { query: { q: req.query.q } });
           const list = oldListPayload(payload);
-          return res.json({ rows: list.data.map(normalizeOldColaborador), total: list.total, source });
+          if (!hasResults(list)) {
+            emptyResult = { source };
+            if (source === primary) fallbackReason = 'empty_results';
+            continue;
+          }
+
+          return res.json({
+            rows: list.data.map(normalizeOldColaborador),
+            total: list.total,
+            source,
+            requestedSource: primary,
+            fallbackUsed: source !== primary,
+            fallbackReason: source !== primary ? fallbackReason : null
+          });
         } catch (error) {
           lastError = error;
+          if (source === primary) fallbackReason = 'primary_error';
         }
       }
 
       if (source === 'new') {
         const token = getSourceToken(req, 'new');
-        if (!token) continue;
+        if (!token) {
+          if (source === primary) fallbackReason = 'primary_error';
+          continue;
+        }
 
         try {
           const payload = await requestExternal('new', '/records/usuario', {
@@ -51,11 +75,36 @@ router.get('/', async (req, res, next) => {
             query: { page: 1, pageSize: 100, q: req.query.q, sortField: 'id', sortDirection: 'ASC' }
           });
           const list = newListPayload(payload);
-          return res.json({ rows: list.data.map(normalizeUsuario), total: list.total, source });
+          if (!hasResults(list)) {
+            emptyResult = { source };
+            if (source === primary) fallbackReason = 'empty_results';
+            continue;
+          }
+
+          return res.json({
+            rows: list.data.map(normalizeUsuario),
+            total: list.total,
+            source,
+            requestedSource: primary,
+            fallbackUsed: source !== primary,
+            fallbackReason: source !== primary ? fallbackReason : null
+          });
         } catch (error) {
           lastError = error;
+          if (source === primary) fallbackReason = 'primary_error';
         }
       }
+    }
+
+    if (emptyResult) {
+      return res.json({
+        rows: [],
+        total: 0,
+        source: emptyResult.source,
+        requestedSource: primary,
+        fallbackUsed: emptyResult.source !== primary,
+        fallbackReason: emptyResult.source !== primary ? fallbackReason : null
+      });
     }
 
     throw lastError || new Error('No hay fuente disponible para colaboradores');

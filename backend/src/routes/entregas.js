@@ -123,12 +123,20 @@ router.get('/', async (req, res, next) => {
 router.get('/:id', async (req, res, next) => {
   try {
     const primary = preferredSource(req);
+    let lastError = null;
+    let fallbackReason = null;
 
     for (const source of sourceOrder(primary)) {
       try {
         if (source === 'old') {
           const payload = await requestExternal('old', `/entregas/${rawExternalId(req.params.id)}`);
-          return res.json({ row: normalizeOldEntrega(payload), source });
+          return res.json({
+            row: normalizeOldEntrega(payload),
+            source,
+            requestedSource: primary,
+            fallbackUsed: source !== primary,
+            fallbackReason: source !== primary ? fallbackReason : null
+          });
         }
 
         const token = getSourceToken(req, 'new');
@@ -136,13 +144,22 @@ router.get('/:id', async (req, res, next) => {
           const payload = await requestExternal('new', `/records/entrega_encabezado/${rawExternalId(req.params.id)}`, {
             token
           });
-          return res.json({ row: normalizeNewEntrega(payload), source });
+          return res.json({
+            row: normalizeNewEntrega(payload),
+            source,
+            requestedSource: primary,
+            fallbackUsed: source !== primary,
+            fallbackReason: source !== primary ? fallbackReason : null
+          });
         }
-      } catch (_error) {
-        // Intenta la siguiente fuente.
+        if (source === primary) fallbackReason = 'primary_error';
+      } catch (error) {
+        lastError = error;
+        if (source === primary) fallbackReason = error.status === 404 ? 'not_found' : 'primary_error';
       }
     }
 
+    if (lastError?.status && lastError.status !== 404) throw lastError;
     res.status(404).json({ error: 'Entrega no encontrada' });
   } catch (error) {
     next(error);

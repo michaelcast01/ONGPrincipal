@@ -113,6 +113,50 @@ router.get('/', async (req, res, next) => {
   }
 });
 
+router.get('/:id', async (req, res, next) => {
+  try {
+    const primary = preferredSource(req);
+    let lastError = null;
+    let fallbackReason = null;
+
+    for (const source of sourceOrder(primary)) {
+      try {
+        if (source === 'old') {
+          const payload = await requestExternal('old', `/colaboradores/${rawExternalId(req.params.id)}`);
+          return res.json({
+            row: normalizeOldColaborador(payload),
+            source,
+            requestedSource: primary,
+            fallbackUsed: source !== primary,
+            fallbackReason: source !== primary ? fallbackReason : null
+          });
+        }
+
+        const token = getSourceToken(req, 'new');
+        if (token) {
+          const payload = await requestExternal('new', `/records/usuario/${rawExternalId(req.params.id)}`, { token });
+          return res.json({
+            row: normalizeUsuario(payload),
+            source,
+            requestedSource: primary,
+            fallbackUsed: source !== primary,
+            fallbackReason: source !== primary ? fallbackReason : null
+          });
+        }
+        if (source === primary) fallbackReason = 'primary_error';
+      } catch (error) {
+        lastError = error;
+        if (source === primary) fallbackReason = error.status === 404 ? 'not_found' : 'primary_error';
+      }
+    }
+
+    if (lastError?.status && lastError.status !== 404) throw lastError;
+    res.status(404).json({ error: 'Colaborador no encontrado' });
+  } catch (error) {
+    next(error);
+  }
+});
+
 router.post('/', requireAuth, async (req, res, next) => {
   try {
     const token = getSourceToken(req, 'old');

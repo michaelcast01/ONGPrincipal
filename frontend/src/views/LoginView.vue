@@ -34,7 +34,7 @@ async function submit() {
       <h1>Operacion social conectada en una sola plataforma.</h1>
       <p>
         Consulta beneficiarios, ayudas, donaciones, inventario y misiones desde
-        una API integrada sobre Supabase/PostgreSQL.
+        una API integrada sobre los sistemas existentes de la ONG.
       </p>
     </section>
 

@@ -1,55 +1,87 @@
 import { Router } from 'express';
-import { query } from '../db.js';
-import { getDemoCatalogo, shouldUseDemoData } from '../services/demoData.js';
+import { optionalAuth } from '../middleware/auth.js';
+import {
+  newListPayload,
+  normalizeNewCiudad,
+  normalizeOldCargo,
+  normalizeOldCiudad,
+  normalizeOldRegion,
+  normalizeOldTipoAyuda,
+  normalizeOldTipoPoblacion,
+  oldListPayload
+} from '../services/externalAdapters.js';
+import { getSourceToken, requestExternal } from '../services/externalApi.js';
 
 const router = Router();
 
+router.use(optionalAuth);
+
+async function readOldCatalog(path, normalizer) {
+  const payload = await requestExternal('old', path);
+  return oldListPayload(payload).data.map(normalizer);
+}
+
 router.get('/regiones', async (_req, res, next) => {
   try {
-    const result = await query('SELECT * FROM integracion.v_departamentos ORDER BY nombre');
-    res.json({ rows: result.rows });
+    res.json({ rows: await readOldCatalog('/catalogos/regiones', normalizeOldRegion) });
   } catch (error) {
-    if (shouldUseDemoData(error)) return res.json(getDemoCatalogo('regiones'));
     next(error);
   }
 });
 
-router.get('/ciudades', async (_req, res, next) => {
+router.get('/ciudades', async (req, res, next) => {
   try {
-    const result = await query('SELECT * FROM integracion.v_ciudades ORDER BY nombre');
-    res.json({ rows: result.rows });
+    const rows = [];
+
+    try {
+      rows.push(...await readOldCatalog('/catalogos/ciudades', normalizeOldCiudad));
+    } catch (_error) {
+      // La API nueva no tiene catalogo de ciudades; se deriva de direcciones si la antigua falla.
+    }
+
+    const newToken = getSourceToken(req, 'new');
+    if (newToken) {
+      try {
+        const payload = await requestExternal('new', '/records/direccion_ubicacion', {
+          token: newToken,
+          query: { page: 1, pageSize: 200 }
+        });
+        const unique = new Map();
+        newListPayload(payload).data.map(normalizeNewCiudad).forEach((city) => {
+          if (city.nombre) unique.set(`${city.region}:${city.nombre}`, city);
+        });
+        rows.push(...unique.values());
+      } catch (_error) {
+        // Si la API nueva no permite esta tabla, se mantiene la respuesta de la antigua.
+      }
+    }
+
+    res.json({ rows });
   } catch (error) {
-    if (shouldUseDemoData(error)) return res.json(getDemoCatalogo('ciudades'));
     next(error);
   }
 });
 
 router.get('/tipos-poblacion', async (_req, res, next) => {
   try {
-    const result = await query('SELECT id_tipo_poblacion AS id, nombre FROM ayudas_sociales.tipo_poblacion ORDER BY nombre');
-    res.json({ rows: result.rows });
+    res.json({ rows: await readOldCatalog('/catalogos/tipos-poblacion', normalizeOldTipoPoblacion) });
   } catch (error) {
-    if (shouldUseDemoData(error)) return res.json(getDemoCatalogo('tiposPoblacion'));
     next(error);
   }
 });
 
 router.get('/tipos-ayuda', async (_req, res, next) => {
   try {
-    const result = await query('SELECT * FROM integracion.v_tipos_ayuda ORDER BY nombre');
-    res.json({ rows: result.rows });
+    res.json({ rows: await readOldCatalog('/catalogos/tipos-ayuda', normalizeOldTipoAyuda) });
   } catch (error) {
-    if (shouldUseDemoData(error)) return res.json(getDemoCatalogo('tiposAyuda'));
     next(error);
   }
 });
 
 router.get('/cargos', async (_req, res, next) => {
   try {
-    const result = await query('SELECT id_cargo AS id, nombre FROM ayudas_sociales.cargo ORDER BY nombre');
-    res.json({ rows: result.rows });
+    res.json({ rows: await readOldCatalog('/catalogos/cargos', normalizeOldCargo) });
   } catch (error) {
-    if (shouldUseDemoData(error)) return res.json(getDemoCatalogo('cargos'));
     next(error);
   }
 });

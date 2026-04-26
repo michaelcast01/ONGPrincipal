@@ -1,6 +1,6 @@
 import { Router } from 'express';
-import { query } from '../db.js';
 import { requireAuth, signToken } from '../middleware/auth.js';
+import { configuredSources, requestExternal } from '../services/externalApi.js';
 
 const router = Router();
 
@@ -23,30 +23,21 @@ function getStaticUsers() {
   ];
 }
 
-async function findDatabaseUser(usuario, contrasena) {
-  const result = await query(
-    `SELECT u.id_usuario,
-            u.usuario,
-            u.nombre,
-            COALESCE(array_remove(array_agg(r.codigo), NULL), '{}') AS roles
-       FROM ong_operativa.usuario u
-       LEFT JOIN ong_operativa.usuario_rol ur ON ur.id_usuario = u.id_usuario
-       LEFT JOIN ong_operativa.rol r ON r.id_rol = ur.id_rol
-      WHERE u.usuario = ?
-        AND u.activo = TRUE
-        AND u.contrasena_hash = crypt(?, u.contrasena_hash)
-      GROUP BY u.id_usuario, u.usuario, u.nombre`,
-    [usuario, contrasena]
-  );
-
-  const user = result.rows[0];
-  if (!user) return null;
+async function loginExternal(source, usuario, contrasena) {
+  const payload = await requestExternal(source, '/auth/login', {
+    method: 'POST',
+    body: {
+      usuario,
+      username: usuario,
+      contrasena,
+      contraseña: contrasena,
+      password: contrasena
+    }
+  });
 
   return {
-    id: user.id_usuario,
-    usuario: user.usuario,
-    nombre: user.nombre,
-    roles: user.roles
+    token: payload.token,
+    usuario: payload.usuario || payload.user || {}
   };
 }
 
@@ -60,18 +51,37 @@ router.post('/login', async (req, res, next) => {
       return res.status(400).json({ error: 'Usuario y contrasena son requeridos' });
     }
 
-    const staticUser = getStaticUsers().find((user) => user.usuario === login && user.contrasena === pass);
-    let user = staticUser
-      ? { id: staticUser.id, usuario: staticUser.usuario, nombre: staticUser.nombre, roles: staticUser.roles }
-      : null;
+    const attempts = await Promise.allSettled(configuredSources().map(async (source) => ({
+      source,
+      session: await loginExternal(source, login, pass)
+    })));
 
-    if (!user) {
-      user = await findDatabaseUser(login, pass);
+    const sessions = attempts
+      .filter((attempt) => attempt.status === 'fulfilled' && attempt.value.session.token)
+      .map((attempt) => attempt.value);
+
+    if (sessions.length === 0) {
+      if (String(process.env.ALLOW_STATIC_LOGIN || '').toLowerCase() === 'true') {
+        const staticUser = getStaticUsers().find((user) => user.usuario === login && user.contrasena === pass);
+        if (staticUser) {
+          const user = { id: staticUser.id, usuario: staticUser.usuario, nombre: staticUser.nombre, roles: staticUser.roles };
+          return res.json({ token: signToken(user), user });
+        }
+      }
+
+      return res.status(401).json({ error: 'Credenciales invalidas en las APIs externas' });
     }
 
-    if (!user) {
-      return res.status(401).json({ error: 'Credenciales invalidas' });
-    }
+    const primary = sessions[0].session.usuario;
+    const externalTokens = Object.fromEntries(sessions.map(({ source, session }) => [source, session.token]));
+    const user = {
+      id: primary.id || primary.id_usuario || login,
+      usuario: primary.nombre_usuario || primary.usuario || login,
+      nombre: primary.nombre || primary.nombre_usuario || login,
+      correo: primary.correo || primary.correo_electronico,
+      roles: [primary.rol || 'usuario'].filter(Boolean),
+      externalTokens
+    };
 
     res.json({ token: signToken(user), user });
   } catch (error) {

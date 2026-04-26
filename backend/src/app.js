@@ -6,7 +6,6 @@ import { fileURLToPath } from 'node:url';
 import swaggerUi from 'swagger-ui-express';
 import YAML from 'yamljs';
 
-import { query } from './db.js';
 import authRoutes from './routes/auth.js';
 import beneficiariosRoutes from './routes/beneficiarios.js';
 import catalogosRoutes from './routes/catalogos.js';
@@ -16,6 +15,7 @@ import entregasRoutes from './routes/entregas.js';
 import metaRoutes from './routes/meta.js';
 import recordsRoutes from './routes/records.js';
 import searchRoutes from './routes/search.js';
+import { configuredSources, requestExternal } from './services/externalApi.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -29,13 +29,22 @@ const swaggerDocument = YAML.load(path.resolve(__dirname, '../swagger.yaml'));
 app.use(cors());
 app.use(express.json({ limit: '2mb' }));
 
+app.get('/', (_req, res) => {
+  res.json({ nombre: 'Conjunto ONG API', version: '1.0.0' });
+});
+
 app.get('/api/health', async (_req, res) => {
-  try {
-    const result = await query('SELECT NOW() AS now');
-    res.json({ ok: true, database: true, now: result.rows[0].now });
-  } catch (error) {
-    res.status(503).json({ ok: false, database: false, message: error.message });
-  }
+  const sources = await Promise.allSettled(
+    configuredSources().map(async (source) => ({ source, data: await requestExternal(source, '/health') }))
+  );
+
+  const apis = sources.map((result) => {
+    if (result.status === 'fulfilled') return { source: result.value.source, ok: true, data: result.value.data };
+    return { source: result.reason.source, ok: false, error: result.reason.message };
+  });
+  const ok = apis.some((api) => api.ok);
+
+  res.status(ok ? 200 : 503).json({ status: ok ? 'ok' : 'error', apis, timestamp: new Date().toISOString() });
 });
 
 app.use('/api/docs', swaggerUi.serve, swaggerUi.setup(swaggerDocument));

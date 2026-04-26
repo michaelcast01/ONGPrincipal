@@ -1,9 +1,12 @@
 import { Router } from 'express';
 import { getEntities, getEntity } from '../config/entities.js';
+import { optionalAuth } from '../middleware/auth.js';
 import { listRecords } from '../services/QueryExecutor.js';
-import { listDemoRecords, shouldUseDemoData } from '../services/demoData.js';
+import { getSourceToken, requestExternal } from '../services/externalApi.js';
 
 const router = Router();
+
+router.use(optionalAuth);
 
 router.get('/schema', (_req, res) => {
   res.json({ entities: getEntities() });
@@ -14,7 +17,7 @@ router.get('/tables', (_req, res) => {
 });
 
 router.post('/validate', (req, res) => {
-  const entity = getEntity(req.body?.table);
+  const entity = getEntity(req.body?.table || req.body?.primaryTable);
   if (!entity) return res.status(400).json({ valid: false, error: 'Tabla no permitida' });
   res.json({ valid: true, entity });
 });
@@ -22,8 +25,20 @@ router.post('/validate', (req, res) => {
 router.post('/execute', async (req, res, next) => {
   try {
     const body = req.body || {};
-    const entity = getEntity(body.table);
+    const externalTable = body.primaryTable || body.table;
+    const entity = getEntity(externalTable);
     if (!entity) return res.status(400).json({ error: 'Tabla no permitida' });
+
+    if (body.primaryTable) {
+      const token = getSourceToken(req, 'new');
+      const payload = await requestExternal('new', `/search/execute`, {
+        method: 'POST',
+        token,
+        query: { page: req.query.page || 1, pageSize: req.query.pageSize || body.pageSize || body.limit || 20 },
+        body
+      });
+      return res.json({ rows: payload.data || [], total: payload.pagination?.total || 0, payload });
+    }
 
     const result = await listRecords(entity, {
       q: body.q,
@@ -32,21 +47,10 @@ router.post('/execute', async (req, res, next) => {
       offset: body.offset,
       orderBy: body.orderBy,
       orderDir: body.orderDir
-    });
+    }, req);
 
     res.json(result);
   } catch (error) {
-    const entity = getEntity(req.body?.table);
-    if (entity && shouldUseDemoData(error)) {
-      return res.json(listDemoRecords(entity, {
-        q: req.body?.q,
-        filters: req.body?.filters || {},
-        limit: req.body?.limit,
-        offset: req.body?.offset,
-        orderBy: req.body?.orderBy,
-        orderDir: req.body?.orderDir
-      }));
-    }
     next(error);
   }
 });

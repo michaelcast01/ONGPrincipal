@@ -109,7 +109,7 @@ onMounted(async () => {
           <option v-for="type in catalogos.tiposAyuda" :key="type.id" :value="type.id">{{ type.nombre }}</option>
         </select>
         <select v-model="filters.source">
-          <option value="">Todos los origenes</option>
+          <option value="">Base por defecto</option>
           <option value="ayudas_sociales">Ayudas sociales</option>
           <option value="ong_operativa">ONG operativa</option>
         </select>

@@ -6,6 +6,7 @@ const rows = ref([]);
 const total = ref(0);
 const error = ref('');
 const saving = ref(false);
+const activeSource = ref('');
 const filters = ref({ q: '', cityId: '', populationTypeId: '', source: '' });
 const catalogos = ref({ ciudades: [], tiposPoblacion: [] });
 const form = ref({ documento: '', nombres: '', apellidos: '', telefono: '', correo: '', id_municipio: '', id_tipo_poblacion: '' });
@@ -24,6 +25,7 @@ async function loadRows() {
     const data = await api.beneficiarios.list({ ...filters.value, limit: 50 });
     rows.value = data.rows || [];
     total.value = data.total || 0;
+    activeSource.value = data.source || '';
   } catch (err) {
     error.value = err.message;
   }
@@ -86,7 +88,10 @@ onMounted(async () => {
     <article class="panel">
       <div class="panel-title-row">
         <h2>Consulta</h2>
-        <span class="muted">{{ total }} registros</span>
+        <span class="muted">
+          {{ total }} registros
+          <template v-if="activeSource"> · usando {{ activeSource === 'new' ? 'Nueva' : 'Antigua' }}</template>
+        </span>
       </div>
       <div class="filter-grid">
         <input v-model="filters.q" placeholder="Buscar" @keyup.enter="loadRows" />
@@ -99,7 +104,7 @@ onMounted(async () => {
           <option v-for="type in catalogos.tiposPoblacion" :key="type.id" :value="type.id">{{ type.nombre }}</option>
         </select>
         <select v-model="filters.source">
-          <option value="">Todos los origenes</option>
+          <option value="">Base por defecto</option>
           <option value="ayudas_sociales">Ayudas sociales</option>
           <option value="ong_operativa">ONG operativa</option>
         </select>

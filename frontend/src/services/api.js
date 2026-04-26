@@ -12,8 +12,10 @@ function buildUrl(path, params) {
 
 async function request(path, options = {}) {
   const token = localStorage.getItem('authToken');
+  const defaultSource = localStorage.getItem('defaultDataSource') || 'old';
   const headers = {
     'Content-Type': 'application/json',
+    'X-ONG-Default-Source': defaultSource,
     ...(options.headers || {})
   };
 

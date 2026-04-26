@@ -1,7 +1,7 @@
 import { Router } from 'express';
 import { optionalAuth } from '../middleware/auth.js';
 import { normalizeOldEntrega, oldListPayload } from '../services/externalAdapters.js';
-import { getSourceToken, requestExternal } from '../services/externalApi.js';
+import { getSourceToken, preferredSource, requestExternal, sourceOrder } from '../services/externalApi.js';
 
 const router = Router();
 
@@ -37,52 +37,57 @@ function addNewDashboard(summary, payload = {}) {
 
 router.get('/summary', async (req, res, next) => {
   try {
-    const summary = emptySummary();
-    const topCities = [];
-    const recentDeliveries = [];
-    let ok = false;
     let lastError = null;
+    const primary = preferredSource(req);
 
-    try {
-      const payload = await requestExternal('old', '/dashboard/summary');
-      addOldSummary(summary, payload);
-      topCities.push(...(payload.topCities || []).map((city) => ({
-        ciudad: city.nombre_ciudad || city.ciudad || 'Sin ciudad',
-        total: city.total_entregas || city.total || 0
-      })));
-      ok = true;
-    } catch (error) {
-      lastError = error;
-    }
+    for (const source of sourceOrder(primary)) {
+      const summary = emptySummary();
+      const topCities = [];
+      const recentDeliveries = [];
 
-    try {
-      const payload = await requestExternal('old', '/entregas', { query: { page: 1, limit: 10 } });
-      recentDeliveries.push(...oldListPayload(payload).data.map(normalizeOldEntrega));
-      ok = true;
-    } catch (error) {
-      lastError = lastError || error;
-    }
+      if (source === 'old') {
+        try {
+          const payload = await requestExternal('old', '/dashboard/summary');
+          addOldSummary(summary, payload);
+          topCities.push(...(payload.topCities || []).map((city) => ({
+            ciudad: city.nombre_ciudad || city.ciudad || 'Sin ciudad',
+            total: city.total_entregas || city.total || 0
+          })));
 
-    const newToken = getSourceToken(req, 'new');
-    if (newToken) {
-      try {
-        const payload = await requestExternal('new', '/meta/app', { token: newToken });
-        addNewDashboard(summary, payload);
-        ok = true;
-      } catch (error) {
-        lastError = lastError || error;
+          try {
+            const deliveries = await requestExternal('old', '/entregas', { query: { page: 1, limit: 10 } });
+            recentDeliveries.push(...oldListPayload(deliveries).data.map(normalizeOldEntrega));
+          } catch (_error) {
+            // El resumen puede mostrarse aunque fallen las entregas recientes.
+          }
+
+          return res.json({ summary, topCities, recentDeliveries, source });
+        } catch (error) {
+          lastError = error;
+        }
+      }
+
+      const newToken = getSourceToken(req, 'new');
+      if (source === 'new' && newToken) {
+        try {
+          const payload = await requestExternal('new', '/meta/app', { token: newToken });
+          addNewDashboard(summary, payload);
+          return res.json({ summary, topCities, recentDeliveries, source });
+        } catch (error) {
+          lastError = error;
+        }
       }
     }
 
-    if (!ok && lastError) throw lastError;
-    res.json({ summary, topCities, recentDeliveries });
+    throw lastError || new Error('No hay fuente disponible para dashboard');
   } catch (error) {
     next(error);
   }
 });
 
-router.get('/top-cities', async (_req, res, next) => {
+router.get('/top-cities', async (req, res, next) => {
   try {
+    if (preferredSource(req) === 'new') return res.json({ rows: [] });
     const payload = await requestExternal('old', '/dashboard/summary');
     res.json({ rows: (payload.topCities || []).map((city) => ({ ciudad: city.nombre_ciudad, total: city.total_entregas || 0 })) });
   } catch (error) {
@@ -90,8 +95,9 @@ router.get('/top-cities', async (_req, res, next) => {
   }
 });
 
-router.get('/recent-deliveries', async (_req, res, next) => {
+router.get('/recent-deliveries', async (req, res, next) => {
   try {
+    if (preferredSource(req) === 'new') return res.json({ rows: [] });
     const payload = await requestExternal('old', '/entregas', { query: { page: 1, limit: 10 } });
     res.json({ rows: oldListPayload(payload).data.map(normalizeOldEntrega) });
   } catch (error) {

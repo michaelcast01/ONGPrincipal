@@ -7,7 +7,7 @@ import {
   rawExternalId,
   toOldColaboradorBody
 } from '../services/externalAdapters.js';
-import { getSourceToken, requestExternal } from '../services/externalApi.js';
+import { getSourceToken, preferredSource, requestExternal, sourceOrder } from '../services/externalApi.js';
 
 const router = Router();
 
@@ -28,21 +28,37 @@ function normalizeUsuario(row = {}) {
 
 router.get('/', async (req, res, next) => {
   try {
-    try {
-      const payload = await requestExternal('old', '/colaboradores', { query: { q: req.query.q } });
-      const list = oldListPayload(payload);
-      return res.json({ rows: list.data.map(normalizeOldColaborador), total: list.total });
-    } catch (oldError) {
-      const token = getSourceToken(req, 'new');
-      if (!token) throw oldError;
+    let lastError = null;
 
-      const payload = await requestExternal('new', '/records/usuario', {
-        token,
-        query: { page: 1, pageSize: 100, q: req.query.q, sortField: 'id', sortDirection: 'ASC' }
-      });
-      const list = newListPayload(payload);
-      return res.json({ rows: list.data.map(normalizeUsuario), total: list.total });
+    for (const source of sourceOrder(preferredSource(req))) {
+      if (source === 'old') {
+        try {
+          const payload = await requestExternal('old', '/colaboradores', { query: { q: req.query.q } });
+          const list = oldListPayload(payload);
+          return res.json({ rows: list.data.map(normalizeOldColaborador), total: list.total, source });
+        } catch (error) {
+          lastError = error;
+        }
+      }
+
+      if (source === 'new') {
+        const token = getSourceToken(req, 'new');
+        if (!token) continue;
+
+        try {
+          const payload = await requestExternal('new', '/records/usuario', {
+            token,
+            query: { page: 1, pageSize: 100, q: req.query.q, sortField: 'id', sortDirection: 'ASC' }
+          });
+          const list = newListPayload(payload);
+          return res.json({ rows: list.data.map(normalizeUsuario), total: list.total, source });
+        } catch (error) {
+          lastError = error;
+        }
+      }
     }
+
+    throw lastError || new Error('No hay fuente disponible para colaboradores');
   } catch (error) {
     next(error);
   }

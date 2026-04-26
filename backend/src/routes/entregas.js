@@ -10,7 +10,7 @@ import {
   rawExternalId,
   toOldEntregaBody
 } from '../services/externalAdapters.js';
-import { getSourceToken, requestExternal } from '../services/externalApi.js';
+import { getSourceToken, preferredSource, requestExternal, sourceOrder } from '../services/externalApi.js';
 
 const router = Router();
 
@@ -28,44 +28,86 @@ function oldQuery(query) {
   };
 }
 
+function sourceFromOrigin(value, fallback) {
+  if (value === 'ayudas_sociales') return 'old';
+  if (value === 'ong_operativa') return 'new';
+  return fallback;
+}
+
 router.get('/', async (req, res, next) => {
   try {
     const { limit } = paginationFromQuery(req.query);
     const rows = [];
     let total = 0;
     let lastError = null;
+    const primary = sourceFromOrigin(req.query.source, preferredSource(req));
 
-    if (!req.query.source || req.query.source === 'ayudas_sociales') {
-      try {
-        const payload = await requestExternal('old', '/entregas', { query: oldQuery(req.query) });
-        const list = oldListPayload(payload);
-        rows.push(...list.data.map(normalizeOldEntrega));
-        total += list.total;
-      } catch (error) {
-        lastError = error;
-      }
-    }
-
-    if (!req.query.source || req.query.source === 'ong_operativa') {
-      const token = getSourceToken(req, 'new');
-      if (token) {
+    for (const source of sourceOrder(primary)) {
+      if (source === 'old') {
         try {
-          const payload = await requestExternal('new', '/records/entrega_encabezado', {
-            token,
-            query: { page: 1, pageSize: limit, q: req.query.q, sortField: 'id', sortDirection: 'DESC' }
-          });
-          const list = newListPayload(payload);
-          rows.push(...list.data.map(normalizeNewEntrega));
+          const payload = await requestExternal('old', '/entregas', { query: oldQuery(req.query) });
+          const list = oldListPayload(payload);
+          rows.push(...list.data.map(normalizeOldEntrega));
           total += list.total;
+          break;
         } catch (error) {
           lastError = error;
+        }
+      }
+
+      if (source === 'new') {
+        const token = getSourceToken(req, 'new');
+        if (token) {
+          try {
+            const payload = await requestExternal('new', '/records/entrega_encabezado', {
+              token,
+              query: { page: 1, pageSize: limit, q: req.query.q, sortField: 'id', sortDirection: 'DESC' }
+            });
+            const list = newListPayload(payload);
+            rows.push(...list.data.map(normalizeNewEntrega));
+            total += list.total;
+            break;
+          } catch (error) {
+            lastError = error;
+          }
+        } else {
+          lastError = new Error('Token de la API nueva no disponible');
         }
       }
     }
 
     const filtered = filterBySource(rows, req.query.source);
     if (filtered.length === 0 && total === 0 && lastError) throw lastError;
-    res.json({ rows: filtered, total: total || filtered.length });
+    res.json({ rows: filtered, total: total || filtered.length, source: primary });
+  } catch (error) {
+    next(error);
+  }
+});
+
+router.get('/:id', async (req, res, next) => {
+  try {
+    const primary = preferredSource(req);
+
+    for (const source of sourceOrder(primary)) {
+      try {
+        if (source === 'old') {
+          const payload = await requestExternal('old', `/entregas/${rawExternalId(req.params.id)}`);
+          return res.json({ row: normalizeOldEntrega(payload), source });
+        }
+
+        const token = getSourceToken(req, 'new');
+        if (token) {
+          const payload = await requestExternal('new', `/records/entrega_encabezado/${rawExternalId(req.params.id)}`, {
+            token
+          });
+          return res.json({ row: normalizeNewEntrega(payload), source });
+        }
+      } catch (_error) {
+        // Intenta la siguiente fuente.
+      }
+    }
+
+    res.status(404).json({ error: 'Entrega no encontrada' });
   } catch (error) {
     next(error);
   }

@@ -200,7 +200,7 @@ th {
   display: flex;
   gap: 0.75rem;
   align-items: center;
-  margin-bottom: 2rem;
+  margin-bottom: 1rem;
 }
 
 .brand-dot {
@@ -213,6 +213,29 @@ th {
 .sidebar nav {
   display: grid;
   gap: 0.35rem;
+}
+
+.source-switch {
+  display: grid;
+  gap: 0.45rem;
+  margin-bottom: 1.4rem;
+  color: rgba(237, 247, 239, 0.72);
+  font-size: 0.78rem;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+.source-switch select {
+  border-color: rgba(255, 255, 255, 0.14);
+  border-radius: 16px;
+  background: rgba(255, 255, 255, 0.1);
+  color: #fff;
+  text-transform: none;
+}
+
+.source-switch option {
+  color: var(--ink);
 }
 
 .sidebar a {

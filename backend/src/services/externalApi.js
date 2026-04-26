@@ -68,6 +68,20 @@ export function sourceOrder(primary = 'old') {
   return [primary, ...sources.filter((source) => source !== primary)];
 }
 
+export function normalizeSource(value, fallback = 'old') {
+  const source = String(value || '').toLowerCase();
+  if (['old', 'antigua', 'ayudas', 'ayudas_sociales'].includes(source)) return 'old';
+  if (['new', 'nueva', 'operativa', 'ong_operativa'].includes(source)) return 'new';
+  return fallback;
+}
+
+export function preferredSource(req, fallback = 'old') {
+  return normalizeSource(
+    req.get?.('x-ong-default-source') || req.get?.('x-ong-source') || req.query?.defaultSource,
+    fallback
+  );
+}
+
 export async function requestExternal(source, path, options = {}) {
   const url = buildUrl(source, path, options.query);
   const headers = {

@@ -159,6 +159,75 @@ function locallyMatches(row, q) {
   return Object.values(row || {}).some((value) => String(value || '').toLowerCase().includes(text));
 }
 
+function parseAdvancedFilters(value) {
+  if (!value) return [];
+
+  try {
+    const parsed = typeof value === 'string' ? JSON.parse(value) : value;
+    if (!Array.isArray(parsed)) return [];
+    return parsed
+      .map((filter) => ({
+        field: String(filter.field || '').trim(),
+        operator: String(filter.operator || '=').trim().toUpperCase(),
+        value: filter.value
+      }))
+      .filter((filter) => filter.field && filter.value !== undefined && filter.value !== null && filter.value !== '');
+  } catch (_error) {
+    return [];
+  }
+}
+
+function advancedFiltersForSchema(schema, filters) {
+  const allowedOperators = new Set(['=', '!=', '<', '>', '<=', '>=', 'LIKE', 'ILIKE', 'IN']);
+  return filters
+    .filter((filter) => schema.columnNames.has(filter.field) && allowedOperators.has(filter.operator))
+    .map((filter) => ({
+      field: filter.field,
+      operator: filter.operator,
+      value: filter.operator === 'IN'
+        ? String(filter.value).split(',').map((item) => item.trim()).filter(Boolean)
+        : filter.value
+    }));
+}
+
+function orderByForSchema(schema, query) {
+  const field = String(query.sortField || '').trim();
+  if (!field || !schema.columnNames.has(field)) {
+    return schema.columnNames.has('id') ? [{ field: 'id', direction: 'ASC' }] : [];
+  }
+
+  return [{
+    field,
+    direction: String(query.sortDirection || 'ASC').toUpperCase() === 'DESC' ? 'DESC' : 'ASC'
+  }];
+}
+
+async function searchNewAdvanced(req, token, schema, limit) {
+  const filters = advancedFiltersForSchema(schema, parseAdvancedFilters(req.query.advancedFilters));
+  const city = newCityFilterValue(req.query.cityId);
+
+  if (city && schema.columnNames.has('ciudad')) {
+    filters.push({ field: 'ciudad', operator: '=', value: city });
+  }
+
+  if (filters.length === 0) return null;
+
+  const payload = await requestExternal('new', '/search/execute', {
+    method: 'POST',
+    token,
+    query: { page: 1, pageSize: 1000 },
+    body: {
+      primaryTable: 'beneficiario',
+      filters,
+      fields: fieldsForNewBeneficiario(schema),
+      orderBy: orderByForSchema(schema, req.query)
+    }
+  });
+
+  const rows = newListPayload(payload).data.filter((row) => locallyMatches(row, req.query.q));
+  return payloadFromRows(rows.slice(0, limit));
+}
+
 async function searchNewByCity(req, token, schema, limit) {
   const city = newCityFilterValue(req.query.cityId);
   if (!city || !schema.columnNames.has('ciudad')) return null;
@@ -209,6 +278,13 @@ async function searchNewByKnownFields(req, token, schema, limit) {
 }
 
 async function requestNewBeneficiariosWithToken(req, limit, token) {
+  const advancedFilters = parseAdvancedFilters(req.query.advancedFilters);
+  if (advancedFilters.length > 0) {
+    const schema = await getNewBeneficiarioSchema(token);
+    const advancedPayload = await searchNewAdvanced(req, token, schema, limit);
+    if (advancedPayload) return advancedPayload;
+  }
+
   if (newCityFilterValue(req.query.cityId)) {
     const schema = await getNewBeneficiarioSchema(token);
     const cityPayload = await searchNewByCity(req, token, schema, limit);
@@ -217,7 +293,13 @@ async function requestNewBeneficiariosWithToken(req, limit, token) {
 
   const recordsPayload = await requestExternal('new', '/records/beneficiario', {
     token,
-    query: { page: 1, pageSize: limit, q: req.query.q, sortField: 'id', sortDirection: 'ASC' }
+    query: {
+      page: 1,
+      pageSize: limit,
+      q: req.query.q,
+      sortField: req.query.sortField || 'id',
+      sortDirection: String(req.query.sortDirection || 'ASC').toUpperCase() === 'DESC' ? 'DESC' : 'ASC'
+    }
   });
 
   const list = newListPayload(recordsPayload);

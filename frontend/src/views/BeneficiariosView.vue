@@ -9,8 +9,37 @@ const saving = ref(false);
 const activeSource = ref('');
 const fallbackUsed = ref(false);
 const filters = ref({ q: '', cityId: '', populationTypeId: '', source: '' });
+const showAdvancedFilters = ref(false);
+const sortField = ref('id');
+const sortDirection = ref('ASC');
+const advancedFilters = ref([]);
 const catalogos = ref({ ciudades: [], tiposPoblacion: [] });
 const form = ref({ documento: '', nombres: '', apellidos: '', telefono: '', correo: '', id_municipio: '', id_tipo_poblacion: '' });
+
+const advancedFieldOptions = [
+  ['id', 'ID'],
+  ['tipo_documento', 'Tipo documento'],
+  ['numero_documento', 'Numero documento'],
+  ['primer_nombre', 'Primer nombre'],
+  ['apellidos', 'Apellidos'],
+  ['telefono_principal', 'Telefono'],
+  ['correo', 'Correo'],
+  ['ciudad', 'Ciudad'],
+  ['grupo_sisben', 'Grupo SISBEN'],
+  ['fecha_registro', 'Fecha registro']
+];
+
+const operatorOptions = [
+  ['=', 'Igual a'],
+  ['!=', 'Diferente de'],
+  ['ILIKE', 'Contiene'],
+  ['LIKE', 'Coincide'],
+  ['>', 'Mayor que'],
+  ['<', 'Menor que'],
+  ['>=', 'Mayor o igual'],
+  ['<=', 'Menor o igual'],
+  ['IN', 'En lista']
+];
 
 async function loadCatalogos() {
   const [ciudades, tiposPoblacion] = await Promise.all([
@@ -23,7 +52,14 @@ async function loadCatalogos() {
 async function loadRows() {
   error.value = '';
   try {
-    const data = await api.beneficiarios.list({ ...filters.value, limit: 50 });
+    const activeAdvancedFilters = advancedFilters.value.filter((filter) => filter.field && filter.value !== '');
+    const data = await api.beneficiarios.list({
+      ...filters.value,
+      limit: 50,
+      sortField: sortField.value,
+      sortDirection: sortDirection.value,
+      advancedFilters: activeAdvancedFilters.length ? JSON.stringify(activeAdvancedFilters) : ''
+    });
     rows.value = data.rows || [];
     total.value = data.total || 0;
     activeSource.value = data.source || '';
@@ -31,6 +67,20 @@ async function loadRows() {
   } catch (err) {
     error.value = err.message;
   }
+}
+
+function addAdvancedFilter() {
+  advancedFilters.value.push({ field: 'primer_nombre', operator: 'ILIKE', value: '' });
+}
+
+function removeAdvancedFilter(index) {
+  advancedFilters.value.splice(index, 1);
+}
+
+function clearAdvancedFilters() {
+  advancedFilters.value = [];
+  sortField.value = 'id';
+  sortDirection.value = 'ASC';
 }
 
 async function createBeneficiario() {
@@ -112,6 +162,50 @@ onMounted(async () => {
           <option value="ong_operativa">ONG operativa</option>
         </select>
         <button class="primary-button compact" @click="loadRows">Filtrar</button>
+      </div>
+
+      <div class="panel-title-row advanced-toggle-row">
+        <button class="ghost-button" type="button" @click="showAdvancedFilters = !showAdvancedFilters">
+          {{ showAdvancedFilters ? 'Ocultar filtros avanzados' : 'Filtros avanzados' }}
+        </button>
+        <span class="muted">{{ advancedFilters.length }} filtros avanzados</span>
+      </div>
+
+      <div v-if="showAdvancedFilters" class="advanced-filter-panel">
+        <div class="advanced-sort-grid">
+          <label>
+            Ordenar por
+            <select v-model="sortField">
+              <option v-for="field in advancedFieldOptions" :key="field[0]" :value="field[0]">{{ field[1] }}</option>
+            </select>
+          </label>
+          <label>
+            Direccion
+            <select v-model="sortDirection">
+              <option value="ASC">Ascendente</option>
+              <option value="DESC">Descendente</option>
+            </select>
+          </label>
+          <button class="primary-button compact" type="button" @click="loadRows">Consultar</button>
+        </div>
+
+        <div class="advanced-actions">
+          <button class="ghost-button" type="button" @click="addAdvancedFilter">Agregar filtro</button>
+          <button class="ghost-button" type="button" @click="clearAdvancedFilters">Limpiar filtros</button>
+        </div>
+
+        <div v-if="advancedFilters.length" class="advanced-filter-list">
+          <div v-for="(filter, index) in advancedFilters" :key="index" class="advanced-filter-row">
+            <select v-model="filter.field">
+              <option v-for="field in advancedFieldOptions" :key="field[0]" :value="field[0]">{{ field[1] }}</option>
+            </select>
+            <select v-model="filter.operator">
+              <option v-for="operator in operatorOptions" :key="operator[0]" :value="operator[0]">{{ operator[1] }}</option>
+            </select>
+            <input v-model="filter.value" placeholder="Valor" @keyup.enter="loadRows" />
+            <button class="ghost-button" type="button" @click="removeAdvancedFilter(index)">Quitar</button>
+          </div>
+        </div>
       </div>
 
       <div class="table-wrap">

@@ -381,12 +381,15 @@ router.get('/', async (req, res, next) => {
       }
     }
 
-    const filtered = filterBySource(rows, req.query.source);
+const filtered = filterBySource(rows, req.query.source);
     if (filtered.length === 0 && total === 0 && lastError && !emptyResult) throw lastError;
     const source = usedSource || emptyResult?.source || primary;
+    const page = paginationFromQuery(req.query).page;
+    const totalPages = Math.ceil(total / limit);
     res.json({
       rows: filtered,
       total: total || filtered.length,
+      pagination: { page, pageSize: limit, totalPages, total },
       source,
       requestedSource: primary,
       fallbackUsed: source !== primary,

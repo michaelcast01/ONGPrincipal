@@ -15,6 +15,7 @@ const sortDirection = ref('ASC');
 const advancedFilters = ref([]);
 const catalogos = ref({ ciudades: [], tiposPoblacion: [] });
 const form = ref({ documento: '', nombres: '', apellidos: '', telefono: '', correo: '', id_municipio: '', id_tipo_poblacion: '' });
+const pagination = ref({ page: 1, totalPages: 1, hasPrev: false, hasNext: false });
 
 const advancedFieldOptions = [
   ['id', 'ID'],
@@ -49,13 +50,14 @@ async function loadCatalogos() {
   catalogos.value = { ciudades: ciudades.rows || [], tiposPoblacion: tiposPoblacion.rows || [] };
 }
 
-async function loadRows() {
+async function loadRows(newPage = pagination.value.page) {
   error.value = '';
   try {
     const activeAdvancedFilters = advancedFilters.value.filter((filter) => filter.field && filter.value !== '');
     const data = await api.beneficiarios.list({
       ...filters.value,
-      limit: 50,
+      page: pagination.value.page,
+      limit: 10,
       sortField: sortField.value,
       sortDirection: sortDirection.value,
       advancedFilters: activeAdvancedFilters.length ? JSON.stringify(activeAdvancedFilters) : ''
@@ -64,8 +66,28 @@ async function loadRows() {
     total.value = data.total || 0;
     activeSource.value = data.source || '';
     fallbackUsed.value = Boolean(data.fallbackUsed);
+    if (data.pagination) {
+      pagination.value = {
+        page: data.pagination.page || 1,
+        totalPages: data.pagination.totalPages || 1,
+        hasPrev: (data.pagination.page || 1) > 1,
+        hasNext: (data.pagination.page || 1) < (data.pagination.totalPages || 1)
+      };
+    }
   } catch (err) {
     error.value = err.message;
+  }
+}
+
+async function prevPage() {
+  if (pagination.value.hasPrev) {
+    await loadRows(pagination.value.page - 1);
+  }
+}
+
+async function nextPage() {
+  if (pagination.value.hasNext) {
+    await loadRows(pagination.value.page + 1);
   }
 }
 
@@ -232,6 +254,58 @@ onMounted(async () => {
           </tbody>
         </table>
       </div>
+
+      <div class="pagination-row">
+        <span class="pagination-info">Pagina {{ pagination.page }} de {{ pagination.totalPages }}</span>
+        <div class="pagination-buttons">
+          <button class="pagination-btn" :disabled="!pagination.hasPrev" @click="prevPage">
+            Anterior
+          </button>
+          <button class="pagination-btn" :disabled="!pagination.hasNext" @click="nextPage">
+            Siguiente
+          </button>
+        </div>
+      </div>
     </article>
   </section>
 </template>
+
+<style scoped>
+.pagination-row {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 1rem 0;
+}
+
+.pagination-info {
+  font-size: 0.875rem;
+  color: #6b7280;
+}
+
+.pagination-buttons {
+  display: flex;
+  gap: 0.5rem;
+}
+
+.pagination-btn {
+  padding: 0.5rem 1.25rem;
+  background: #0d9488;
+  color: white;
+  border: none;
+  border-radius: 6px;
+  cursor: pointer;
+  font-size: 0.875rem;
+  font-weight: 500;
+  transition: background 0.2s;
+}
+
+.pagination-btn:hover:not(:disabled) {
+  background: #0f766e;
+}
+
+.pagination-btn:disabled {
+  background: #9ca3af;
+  cursor: not-allowed;
+}
+</style>

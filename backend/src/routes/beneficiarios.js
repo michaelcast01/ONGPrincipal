@@ -42,6 +42,131 @@ function hasResults(list) {
   return (list.data || []).length > 0 && Number(list.total || list.data.length || 0) > 0;
 }
 
+function readableOrigin(origin) {
+  if (origin === 'ayudas_sociales') return 'Ayudas sociales';
+  if (origin === 'ong_operativa') return 'ONG operativa';
+  return origin || 'Desconocido';
+}
+
+function aggregateRows(rows, field, mapLabel = (value) => value || 'Desconocido') {
+  const totals = new Map();
+
+  for (const row of rows) {
+    const label = mapLabel(row?.[field]);
+    totals.set(label, (totals.get(label) || 0) + 1);
+  }
+
+  return [...totals.entries()]
+    .sort((a, b) => b[1] - a[1])
+    .map(([label, total]) => ({ label, total }));
+}
+
+function buildAnalytics(rows) {
+  return {
+    byOrigin: aggregateRows(rows, 'origen', readableOrigin),
+    byCity: aggregateRows(rows, 'ciudad', (value) => value || 'Sin ciudad')
+  };
+}
+
+function oldPageQuery(query = {}, page = null, limit = null) {
+  const paginationQuery = { ...query };
+  if (page !== null && page !== undefined) paginationQuery.page = page;
+  if (limit !== null && limit !== undefined) paginationQuery.limit = limit;
+  const { page: parsedPage, limit: parsedLimit } = paginationFromQuery(paginationQuery);
+
+  return {
+    page: parsedPage,
+    limit: parsedLimit,
+    q: query.q,
+    cityId: rawExternalId(query.cityId),
+    populationTypeId: query.populationTypeId,
+    helpTypeId: rawExternalId(query.helpTypeId)
+  };
+}
+
+async function collectOldBeneficiarios(query) {
+  const pageSize = 200;
+  const firstPayload = await requestExternal('old', '/beneficiarios', { query: oldPageQuery(query, 1, pageSize) });
+  const firstList = oldListPayload(firstPayload);
+  const total = Number(firstList.total || firstList.data.length || 0);
+  const totalPages = Math.max(Math.ceil(total / pageSize), 1);
+  const rows = firstList.data.map(normalizeOldBeneficiario);
+
+  for (let page = 2; page <= totalPages; page += 1) {
+    const payload = await requestExternal('old', '/beneficiarios', { query: oldPageQuery(query, page, pageSize) });
+    rows.push(...oldListPayload(payload).data.map(normalizeOldBeneficiario));
+  }
+
+  return rows;
+}
+
+async function collectNewBeneficiarios(query, token, schema) {
+  const pageSize = 200;
+  const rows = [];
+  const city = newCityFilterValue(query.cityId);
+
+  if (city && schema.columnNames.has('ciudad')) {
+    const requestPage = async (page) => requestExternal('new', '/search/execute', {
+      method: 'POST',
+      token,
+      query: { page, pageSize },
+      body: {
+        primaryTable: 'beneficiario',
+        filters: [{ field: 'ciudad', operator: '=', value: city }],
+        fields: fieldsForNewBeneficiario(schema),
+        orderBy: orderByForSchema(schema, query)
+      }
+    });
+
+    const firstPayload = await requestPage(1);
+    const firstList = newListPayload(firstPayload);
+    const total = Number(firstList.total || firstList.data.length || 0);
+    const totalPages = Math.max(Math.ceil(total / pageSize), 1);
+    rows.push(...firstList.data.map(normalizeNewBeneficiario).filter((row) => locallyMatches(row, query.q)));
+
+    for (let page = 2; page <= totalPages; page += 1) {
+      const payload = await requestPage(page);
+      rows.push(...newListPayload(payload).data.map(normalizeNewBeneficiario).filter((row) => locallyMatches(row, query.q)));
+    }
+
+    return rows;
+  }
+
+  const requestPage = async (page) => requestExternal('new', '/records/beneficiario', {
+    token,
+    query: {
+      page,
+      pageSize,
+      q: query.q,
+      sortField: query.sortField || 'id',
+      sortDirection: String(query.sortDirection || 'ASC').toUpperCase() === 'DESC' ? 'DESC' : 'ASC'
+    }
+  });
+
+  const firstPayload = await requestPage(1);
+  const firstList = newListPayload(firstPayload);
+  const total = Number(firstList.total || firstList.data.length || 0);
+  const totalPages = Math.max(Math.ceil(total / pageSize), 1);
+  rows.push(...firstList.data.map(normalizeNewBeneficiario));
+
+  for (let page = 2; page <= totalPages; page += 1) {
+    const payload = await requestPage(page);
+    rows.push(...newListPayload(payload).data.map(normalizeNewBeneficiario));
+  }
+
+  return rows;
+}
+
+async function collectBeneficiariosAnalytics(req, source) {
+  if (source === 'old') {
+    return buildAnalytics(await collectOldBeneficiarios(req.query));
+  }
+
+  const token = getSourceToken(req, 'new') || await getServiceToken('new');
+  const schema = await getNewBeneficiarioSchema(token);
+  return buildAnalytics(await collectNewBeneficiarios(req.query, token, schema));
+}
+
 const NEW_SCHEMA_TTL_MS = 5 * 60 * 1000;
 const DEFAULT_NEW_FIELDS = [
   'id',
@@ -381,11 +506,21 @@ router.get('/', async (req, res, next) => {
       }
     }
 
-const filtered = filterBySource(rows, req.query.source);
+    const filtered = filterBySource(rows, req.query.source);
     if (filtered.length === 0 && total === 0 && lastError && !emptyResult) throw lastError;
     const source = usedSource || emptyResult?.source || primary;
     const page = paginationFromQuery(req.query).page;
     const totalPages = Math.ceil(total / limit);
+    let analytics = null;
+
+    if (String(req.query.includeStats || '').toLowerCase() === '1' || String(req.query.includeStats || '').toLowerCase() === 'true') {
+      try {
+        analytics = await collectBeneficiariosAnalytics(req, source);
+      } catch (_error) {
+        analytics = null;
+      }
+    }
+
     res.json({
       rows: filtered,
       total: total || filtered.length,
@@ -394,7 +529,8 @@ const filtered = filterBySource(rows, req.query.source);
       requestedSource: primary,
       fallbackUsed: source !== primary,
       fallbackReason: source !== primary ? fallbackReason : null,
-      attempts
+      attempts,
+      analytics
     });
   } catch (error) {
     next(error);

@@ -9,6 +9,7 @@ const summary = ref({});
 const topCities = ref([]);
 const recentDeliveries = ref([]);
 const beneficiarios = ref([]);
+const analytics = ref({ byOrigin: [], byCity: [] });
 const catalogos = ref({ ciudades: [], tiposPoblacion: [], tiposAyuda: [] });
 const filters = ref({ q: '', cityId: '', populationTypeId: '', helpTypeId: '' });
 const pagination = ref({ page: 1, totalPages: 1, hasPrev: false, hasNext: false });
@@ -21,6 +22,10 @@ const cards = [
   ['total_donantes', 'Donantes'],
   ['stock_inventario', 'Stock inventario']
 ];
+
+function resetPagination() {
+  pagination.value = { page: 1, totalPages: 1, hasPrev: false, hasNext: false };
+}
 
 async function loadDashboard() {
   const data = await api.dashboard();
@@ -44,20 +49,31 @@ async function loadCatalogos() {
 }
 
 async function searchBeneficiarios(newPage = null) {
-  if (newPage) {
-    pagination.value.page = newPage;
-  }
-  const currentFilters = { ...filters.value, page: pagination.value.page, limit: 10 };
-  const data = await api.beneficiarios.list(currentFilters);
-  beneficiarios.value = data.rows || [];
-  if (data.pagination) {
+  try {
+    if (newPage !== null) {
+      pagination.value.page = newPage;
+    }
+    const currentFilters = { ...filters.value, page: pagination.value.page, limit: 10, includeStats: 1 };
+    const data = await api.beneficiarios.list(currentFilters);
+    beneficiarios.value = data.rows || [];
+    analytics.value = data.analytics || { byOrigin: [], byCity: [] };
+    const currentPage = data.pagination?.page || pagination.value.page || 1;
+    const totalPages = data.pagination?.totalPages || 1;
     pagination.value = {
-      page: data.pagination.page || 1,
-      totalPages: data.pagination.totalPages || 1,
-      hasPrev: (data.pagination.page || 1) > 1,
-      hasNext: (data.pagination.page || 1) < (data.pagination.totalPages || 1)
+      page: currentPage,
+      totalPages,
+      hasPrev: currentPage > 1,
+      hasNext: currentPage < totalPages
     };
+  } catch (err) {
+    error.value = err.message;
+    throw err;
   }
+}
+
+async function applyFilters() {
+  resetPagination();
+  await searchBeneficiarios(1);
 }
 
 async function prevPage() {
@@ -77,7 +93,7 @@ async function load() {
   error.value = '';
   try {
     await Promise.all([loadDashboard(), loadCatalogos()]);
-    await searchBeneficiarios();
+    await applyFilters();
   } catch (err) {
     error.value = err.message;
   } finally {
@@ -129,20 +145,20 @@ onMounted(load);
     <article class="panel">
       <div class="panel-title-row">
         <h2>Consulta rapida de beneficiarios</h2>
-        <button class="primary-button compact" @click="searchBeneficiarios">Consultar</button>
+        <button class="primary-button compact" @click="applyFilters">Consultar</button>
       </div>
 
       <div class="filter-grid">
-        <input v-model="filters.q" placeholder="Nombre, documento o correo" />
-        <select v-model="filters.cityId">
+        <input v-model="filters.q" placeholder="Nombre, documento o correo" @keyup.enter="applyFilters" />
+        <select v-model="filters.cityId" @change="applyFilters">
           <option value="">Todas las ciudades</option>
           <option v-for="city in catalogos.ciudades" :key="city.id" :value="city.id">{{ city.nombre }}</option>
         </select>
-        <select v-model="filters.populationTypeId">
+        <select v-model="filters.populationTypeId" @change="applyFilters">
           <option value="">Tipo poblacion</option>
           <option v-for="type in catalogos.tiposPoblacion" :key="type.id" :value="type.id">{{ type.nombre }}</option>
         </select>
-        <select v-model="filters.helpTypeId">
+        <select v-model="filters.helpTypeId" @change="applyFilters">
           <option value="">Tipo ayuda</option>
           <option v-for="type in catalogos.tiposAyuda" :key="type.id" :value="type.id">{{ type.nombre }}</option>
         </select>
@@ -181,7 +197,23 @@ onMounted(load);
         </div>
       </div>
 
-      <BeneficiariosChart :data="beneficiarios" />
+      <div class="chart-grid">
+        <BeneficiariosChart
+          title="Beneficiarios por origen"
+          :data="analytics.byOrigin.length ? analytics.byOrigin : beneficiarios"
+          :group-by="analytics.byOrigin.length ? 'label' : 'origen'"
+          :value-key="analytics.byOrigin.length ? 'total' : ''"
+          variant="pie"
+        />
+        <BeneficiariosChart
+          title="Beneficiarios por ciudad"
+          :data="analytics.byCity.length ? analytics.byCity : beneficiarios"
+          :group-by="analytics.byCity.length ? 'label' : 'ciudad'"
+          :value-key="analytics.byCity.length ? 'total' : ''"
+          variant="bar"
+          :limit="5"
+        />
+      </div>
     </article>
   </section>
 </template>
@@ -223,5 +255,11 @@ onMounted(load);
 .pagination-btn:disabled {
   background: #9ca3af;
   cursor: not-allowed;
+}
+
+.chart-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+  gap: 1rem;
 }
 </style>

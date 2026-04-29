@@ -1,21 +1,43 @@
 <script setup>
 import { computed } from 'vue';
-import { Pie } from 'vue-chartjs';
+import { Bar, Pie } from 'vue-chartjs';
 import {
   Chart as ChartJS,
   Title,
   Tooltip,
   Legend,
   ArcElement,
-  CategoryScale
+  CategoryScale,
+  BarElement,
+  LinearScale
 } from 'chart.js';
 
-ChartJS.register(Title, Tooltip, Legend, ArcElement, CategoryScale);
+ChartJS.register(Title, Tooltip, Legend, ArcElement, CategoryScale, BarElement, LinearScale);
 
 const props = defineProps({
   data: {
     type: Array,
     default: () => []
+  },
+  title: {
+    type: String,
+    default: 'Distribucion de beneficiarios'
+  },
+  groupBy: {
+    type: String,
+    default: 'origen'
+  },
+  valueKey: {
+    type: String,
+    default: ''
+  },
+  variant: {
+    type: String,
+    default: 'pie'
+  },
+  limit: {
+    type: Number,
+    default: 6
   }
 });
 
@@ -23,12 +45,17 @@ const chartData = computed(() => {
   const countByOrigen = {};
 
   props.data.forEach((item) => {
-    const origen = item.origen || 'Desconocido';
-    countByOrigen[origen] = (countByOrigen[origen] || 0) + 1;
+    const origen = item[props.groupBy] || 'Desconocido';
+    const amount = props.valueKey ? Number(item[props.valueKey] || 0) : 1;
+    countByOrigen[origen] = (countByOrigen[origen] || 0) + amount;
   });
 
-  const labels = Object.keys(countByOrigen);
-  const values = Object.values(countByOrigen);
+  const entries = Object.entries(countByOrigen)
+    .sort((a, b) => b[1] - a[1])
+    .slice(0, props.limit);
+
+  const labels = entries.map(([label]) => label);
+  const values = entries.map(([, value]) => value);
 
   const colors = [
     '#4F46E5',
@@ -52,7 +79,7 @@ const chartData = computed(() => {
   };
 });
 
-const chartOptions = {
+const pieOptions = {
   responsive: true,
   maintainAspectRatio: false,
   plugins: {
@@ -78,13 +105,36 @@ const chartOptions = {
   }
 };
 
+const barOptions = {
+  responsive: true,
+  maintainAspectRatio: false,
+  plugins: {
+    legend: {
+      display: false
+    }
+  },
+  scales: {
+    y: {
+      beginAtZero: true,
+      ticks: {
+        precision: 0
+      }
+    }
+  }
+};
+
 const hasData = computed(() => props.data.length > 0);
 </script>
 
 <template>
   <div class="chart-container">
+    <h3 class="chart-title">{{ title }}</h3>
     <div v-if="hasData" class="chart-wrapper">
-      <Pie :data="chartData" :options="chartOptions" />
+      <component
+        :is="variant === 'bar' ? Bar : Pie"
+        :data="chartData"
+        :options="variant === 'bar' ? barOptions : pieOptions"
+      />
     </div>
     <div v-else class="no-data">
       <p>No hay datos para mostrar</p>
@@ -97,6 +147,11 @@ const hasData = computed(() => props.data.length > 0);
 .chart-container {
   width: 100%;
   min-height: 300px;
+}
+
+.chart-title {
+  margin: 0 0 0.75rem;
+  font-size: 1rem;
 }
 
 .chart-wrapper {

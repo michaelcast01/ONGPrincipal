@@ -68,6 +68,137 @@ function buildAnalytics(rows) {
   };
 }
 
+function csvEscape(value) {
+  const text = String(value ?? '');
+  return /[",\r\n]/.test(text) ? `"${text.replace(/"/g, '""')}"` : text;
+}
+
+function beneficiariosToCsv(rows = []) {
+  const columns = [
+    ['Nombre', 'nombre_completo'],
+    ['Apellidos', 'apellidos'],
+    ['Documento', 'documento'],
+    ['Telefono', 'telefono'],
+    ['Correo', 'correo'],
+    ['Ciudad', 'ciudad'],
+    ['Region', 'region'],
+    ['Grupo SISBEN', 'grupo_sisben'],
+    ['Fecha registro', 'fecha_registro'],
+    ['Origen', 'origen']
+  ];
+
+  const lines = [columns.map(([header]) => csvEscape(header)).join(',')];
+  for (const row of rows) {
+    lines.push(columns.map(([, key]) => csvEscape(row?.[key])).join(','));
+  }
+
+  return lines.join('\r\n');
+}
+
+async function exportNewRecordsPage(req, token, page, pageSize) {
+  return requestExternal('new', '/records/beneficiario', {
+    token,
+    query: {
+      page,
+      pageSize,
+      q: req.query.q,
+      sortField: req.query.sortField || 'id',
+      sortDirection: String(req.query.sortDirection || 'ASC').toUpperCase() === 'DESC' ? 'DESC' : 'ASC'
+    }
+  });
+}
+
+async function exportNewAdvancedPage(req, token, schema, page, pageSize) {
+  const filters = advancedFiltersForSchema(schema, parseAdvancedFilters(req.query.advancedFilters));
+  const city = newCityFilterValue(req.query.cityId);
+
+  if (city && schema.columnNames.has('ciudad')) {
+    filters.push({ field: 'ciudad', operator: '=', value: city });
+  }
+
+  if (filters.length === 0) return null;
+
+  return requestExternal('new', '/search/execute', {
+    method: 'POST',
+    token,
+    query: { page, pageSize },
+    body: {
+      primaryTable: 'beneficiario',
+      filters,
+      fields: fieldsForNewBeneficiario(schema),
+      orderBy: orderByForSchema(schema, req.query)
+    }
+  });
+}
+
+async function exportNewCityPage(req, token, schema, page, pageSize) {
+  const city = newCityFilterValue(req.query.cityId);
+  if (!city || !schema.columnNames.has('ciudad')) return null;
+
+  return requestExternal('new', '/search/execute', {
+    method: 'POST',
+    token,
+    query: { page, pageSize },
+    body: {
+      primaryTable: 'beneficiario',
+      filters: [{ field: 'ciudad', operator: '=', value: city }],
+      fields: fieldsForNewBeneficiario(schema),
+      orderBy: schema.columnNames.has('id') ? [{ field: 'id', direction: 'ASC' }] : []
+    }
+  });
+}
+
+async function collectNewBeneficiariosForExport(req, token, schema) {
+  const pageSize = 200;
+  const advancedPayload = await exportNewAdvancedPage(req, token, schema, 1, pageSize);
+  if (advancedPayload) {
+    const rows = [];
+    const firstList = newListPayload(advancedPayload);
+    const totalPages = Math.max(Math.ceil(Number(firstList.total || firstList.data.length || 0) / pageSize), 1);
+    rows.push(...firstList.data.map(normalizeNewBeneficiario));
+
+    for (let page = 2; page <= totalPages; page += 1) {
+      const payload = await exportNewAdvancedPage(req, token, schema, page, pageSize);
+      rows.push(...newListPayload(payload).data.map(normalizeNewBeneficiario));
+    }
+
+    return rows;
+  }
+
+  const cityPayload = await exportNewCityPage(req, token, schema, 1, pageSize);
+  if (cityPayload) {
+    const rows = [];
+    const firstList = newListPayload(cityPayload);
+    const totalPages = Math.max(Math.ceil(Number(firstList.total || firstList.data.length || 0) / pageSize), 1);
+    rows.push(...firstList.data.map(normalizeNewBeneficiario));
+
+    for (let page = 2; page <= totalPages; page += 1) {
+      const payload = await exportNewCityPage(req, token, schema, page, pageSize);
+      rows.push(...newListPayload(payload).data.map(normalizeNewBeneficiario));
+    }
+
+    return rows;
+  }
+
+  const rows = [];
+  const firstPayload = await exportNewRecordsPage(req, token, 1, pageSize);
+  const firstList = newListPayload(firstPayload);
+  const totalPages = Math.max(Math.ceil(Number(firstList.total || firstList.data.length || 0) / pageSize), 1);
+  rows.push(...firstList.data.map(normalizeNewBeneficiario));
+
+  for (let page = 2; page <= totalPages; page += 1) {
+    const payload = await exportNewRecordsPage(req, token, page, pageSize);
+    rows.push(...newListPayload(payload).data.map(normalizeNewBeneficiario));
+  }
+
+  if (rows.length === 0 && req.query.q) {
+    const fallback = await searchNewByKnownFields(req, token, schema, 1000);
+    rows.push(...(fallback.data || []));
+  }
+
+  return rows;
+}
+
 function oldPageQuery(query = {}, page = null, limit = null) {
   const paginationQuery = { ...query };
   if (page !== null && page !== undefined) paginationQuery.page = page;
@@ -532,6 +663,36 @@ router.get('/', async (req, res, next) => {
       attempts,
       analytics
     });
+  } catch (error) {
+    next(error);
+  }
+});
+
+router.get('/export', async (req, res, next) => {
+  try {
+    const primary = sourceFromOrigin(req.query.source, preferredSource(req));
+    let rows = [];
+
+    for (const source of sourcesForRequest(req, primary)) {
+      try {
+        if (source === 'old') {
+          rows = await collectOldBeneficiarios(req.query);
+        } else {
+          const token = getSourceToken(req, 'new') || await getServiceToken('new');
+          const schema = await getNewBeneficiarioSchema(token);
+          rows = await collectNewBeneficiariosForExport(req, token, schema);
+        }
+
+        if (rows.length > 0) break;
+      } catch (error) {
+        if (source === primary) throw error;
+      }
+    }
+
+    const csv = beneficiariosToCsv(rows);
+    res.setHeader('Content-Type', 'text/csv; charset=utf-8');
+    res.setHeader('Content-Disposition', 'attachment; filename="beneficiarios-filtrados.csv"');
+    res.send(`\ufeff${csv}`);
   } catch (error) {
     next(error);
   }

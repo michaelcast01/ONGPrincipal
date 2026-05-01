@@ -5,7 +5,6 @@ import { api } from '../services/api.js';
 const rows = ref([]);
 const cargos = ref([]);
 const error = ref('');
-const form = ref({ documento: '', nombres: '', apellidos: '', telefono: '', correo: '', id_cargo: '' });
 
 async function load() {
   error.value = '';
@@ -13,16 +12,6 @@ async function load() {
     const [workers, roles] = await Promise.all([api.colaboradores.list(), api.catalogos.cargos()]);
     rows.value = workers.rows || [];
     cargos.value = roles.rows || [];
-  } catch (err) {
-    error.value = err.message;
-  }
-}
-
-async function createColaborador() {
-  try {
-    await api.colaboradores.create({ ...form.value });
-    form.value = { documento: '', nombres: '', apellidos: '', telefono: '', correo: '', id_cargo: '' };
-    await load();
   } catch (err) {
     error.value = err.message;
   }
@@ -42,22 +31,6 @@ onMounted(load);
     </header>
 
     <p v-if="error" class="form-error">{{ error }}</p>
-
-    <article class="panel">
-      <h2>Nuevo colaborador</h2>
-      <form class="form-grid" @submit.prevent="createColaborador">
-        <input v-model="form.documento" placeholder="Documento" required />
-        <input v-model="form.nombres" placeholder="Nombres" required />
-        <input v-model="form.apellidos" placeholder="Apellidos" />
-        <input v-model="form.telefono" placeholder="Telefono" />
-        <input v-model="form.correo" placeholder="Correo" type="email" />
-        <select v-model="form.id_cargo">
-          <option value="">Cargo</option>
-          <option v-for="cargo in cargos" :key="cargo.id" :value="cargo.id">{{ cargo.nombre }}</option>
-        </select>
-        <button class="primary-button">Crear</button>
-      </form>
-    </article>
 
     <article class="panel">
       <h2>Listado</h2>

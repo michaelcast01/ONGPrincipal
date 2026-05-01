@@ -5,7 +5,7 @@ import { api } from '../services/api.js';
 const rows = ref([]);
 const total = ref(0);
 const error = ref('');
-const saving = ref(false);
+const exporting = ref(false);
 const activeSource = ref('');
 const fallbackUsed = ref(false);
 const filters = ref({ q: '', cityId: '', populationTypeId: '', source: '' });
@@ -14,7 +14,6 @@ const sortField = ref('id');
 const sortDirection = ref('ASC');
 const advancedFilters = ref([]);
 const catalogos = ref({ ciudades: [], tiposPoblacion: [] });
-const form = ref({ documento: '', nombres: '', apellidos: '', telefono: '', correo: '', id_municipio: '', id_tipo_poblacion: '' });
 const pagination = ref({ page: 1, totalPages: 1, hasPrev: false, hasNext: false });
 
 const advancedFieldOptions = [
@@ -79,6 +78,34 @@ async function loadRows(newPage = pagination.value.page) {
   }
 }
 
+async function exportCsv() {
+  exporting.value = true;
+  error.value = '';
+  try {
+    const activeAdvancedFilters = advancedFilters.value.filter((filter) => filter.field && filter.value !== '');
+    const blob = await api.beneficiarios.exportCsv({
+      ...filters.value,
+      sortField: sortField.value,
+      sortDirection: sortDirection.value,
+      advancedFilters: activeAdvancedFilters.length ? JSON.stringify(activeAdvancedFilters) : ''
+    });
+
+    const url = window.URL.createObjectURL(blob);
+    const link = document.createElement('a');
+    link.href = url;
+    link.download = 'beneficiarios-filtrados.csv';
+    link.style.display = 'none';
+    document.body.appendChild(link);
+    link.click();
+    link.remove();
+    window.setTimeout(() => window.URL.revokeObjectURL(url), 0);
+  } catch (err) {
+    error.value = err.message;
+  } finally {
+    exporting.value = false;
+  }
+}
+
 async function prevPage() {
   if (pagination.value.hasPrev) {
     await loadRows(pagination.value.page - 1);
@@ -105,20 +132,6 @@ function clearAdvancedFilters() {
   sortDirection.value = 'ASC';
 }
 
-async function createBeneficiario() {
-  saving.value = true;
-  error.value = '';
-  try {
-    await api.beneficiarios.create({ ...form.value });
-    form.value = { documento: '', nombres: '', apellidos: '', telefono: '', correo: '', id_municipio: '', id_tipo_poblacion: '' };
-    await loadRows();
-  } catch (err) {
-    error.value = err.message;
-  } finally {
-    saving.value = false;
-  }
-}
-
 onMounted(async () => {
   await loadCatalogos();
   await loadRows();
@@ -136,28 +149,6 @@ onMounted(async () => {
     </header>
 
     <p v-if="error" class="form-error">{{ error }}</p>
-
-    <article class="panel">
-      <h2>Nuevo beneficiario de ayudas sociales</h2>
-      <form class="form-grid" @submit.prevent="createBeneficiario">
-        <input v-model="form.documento" placeholder="Documento" required />
-        <input v-model="form.nombres" placeholder="Nombres" required />
-        <input v-model="form.apellidos" placeholder="Apellidos" />
-        <input v-model="form.telefono" placeholder="Telefono" />
-        <input v-model="form.correo" placeholder="Correo" type="email" />
-        <select v-model="form.id_municipio">
-          <option value="">Ciudad</option>
-          <option v-for="city in catalogos.ciudades.filter((item) => item.origen === 'ayudas_sociales')" :key="city.id" :value="String(city.id).replace('ayudas:', '')">
-            {{ city.nombre }}
-          </option>
-        </select>
-        <select v-model="form.id_tipo_poblacion">
-          <option value="">Tipo poblacion</option>
-          <option v-for="type in catalogos.tiposPoblacion" :key="type.id" :value="type.id">{{ type.nombre }}</option>
-        </select>
-        <button class="primary-button" :disabled="saving">{{ saving ? 'Guardando...' : 'Crear' }}</button>
-      </form>
-    </article>
 
     <article class="panel">
       <div class="panel-title-row">
@@ -184,6 +175,9 @@ onMounted(async () => {
           <option value="ong_operativa">ONG operativa</option>
         </select>
         <button class="primary-button compact" @click="loadRows">Filtrar</button>
+        <button class="ghost-button compact" type="button" @click="exportCsv" :disabled="exporting">
+          {{ exporting ? 'Exportando...' : 'Exportar CSV' }}
+        </button>
       </div>
 
       <div class="panel-title-row advanced-toggle-row">

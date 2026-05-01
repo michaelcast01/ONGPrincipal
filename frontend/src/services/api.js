@@ -39,6 +39,35 @@ async function request(path, options = {}) {
   return payload;
 }
 
+async function requestBlob(path, options = {}) {
+  const token = localStorage.getItem('authToken');
+  const defaultSource = localStorage.getItem('defaultDataSource') || 'old';
+  const headers = {
+    'X-ONG-Default-Source': defaultSource,
+    ...(options.headers || {})
+  };
+
+  if (token) headers.Authorization = `Bearer ${token}`;
+
+  let response;
+  try {
+    response = await fetch(buildUrl(path, options.params), {
+      method: options.method || 'GET',
+      headers,
+      body: options.body ? JSON.stringify(options.body) : undefined
+    });
+  } catch (_error) {
+    throw new Error(`No se pudo conectar con el backend en ${API_BASE}`);
+  }
+
+  if (!response.ok) {
+    const payload = await response.json().catch(() => ({}));
+    throw new Error(payload.error || payload.message || 'Error de comunicacion');
+  }
+
+  return response.blob();
+}
+
 export const api = {
   login: (credentials) => request('/auth/login', { method: 'POST', body: credentials }),
   profile: () => request('/auth/profile'),
@@ -52,6 +81,7 @@ export const api = {
   },
   beneficiarios: {
     list: (params) => request('/beneficiarios', { params }),
+    exportCsv: (params) => requestBlob('/beneficiarios/export', { params }),
     create: (body) => request('/beneficiarios', { method: 'POST', body }),
     update: (id, body) => request(`/beneficiarios/${id}`, { method: 'PUT', body }),
     remove: (id) => request(`/beneficiarios/${id}`, { method: 'DELETE' })

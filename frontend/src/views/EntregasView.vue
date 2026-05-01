@@ -5,24 +5,16 @@ import { api } from '../services/api.js';
 const rows = ref([]);
 const total = ref(0);
 const error = ref('');
-const saving = ref(false);
 const filters = ref({ q: '', cityId: '', helpTypeId: '', source: '' });
 const catalogos = ref({ ciudades: [], tiposAyuda: [] });
-const beneficiarios = ref([]);
-const colaboradores = ref([]);
-const form = ref({ id_beneficiario: '', id_municipio: '', id_colaborador: '', id_tipo_ayuda: '', fecha_entrega: '', cantidad: 1, observacion: '' });
 const pagination = ref({ page: 1, totalPages: 1, hasPrev: false, hasNext: false });
 
 async function loadCatalogos() {
-  const [ciudades, tiposAyuda, people, workers] = await Promise.all([
+  const [ciudades, tiposAyuda] = await Promise.all([
     api.catalogos.ciudades(),
-    api.catalogos.tiposAyuda(),
-    api.beneficiarios.list({ source: 'ayudas_sociales', limit: 100 }),
-    api.colaboradores.list()
+    api.catalogos.tiposAyuda()
   ]);
   catalogos.value = { ciudades: ciudades.rows || [], tiposAyuda: tiposAyuda.rows || [] };
-  beneficiarios.value = people.rows || [];
-  colaboradores.value = workers.rows || [];
 }
 
 async function loadRows(newPage = pagination.value.page) {
@@ -56,20 +48,6 @@ async function nextPage() {
   }
 }
 
-async function createEntrega() {
-  saving.value = true;
-  error.value = '';
-  try {
-    await api.entregas.create({ ...form.value });
-    form.value = { id_beneficiario: '', id_municipio: '', id_colaborador: '', id_tipo_ayuda: '', fecha_entrega: '', cantidad: 1, observacion: '' };
-    await loadRows();
-  } catch (err) {
-    error.value = err.message;
-  } finally {
-    saving.value = false;
-  }
-}
-
 onMounted(async () => {
   await loadCatalogos();
   await loadRows();
@@ -87,32 +65,6 @@ onMounted(async () => {
     </header>
 
     <p v-if="error" class="form-error">{{ error }}</p>
-
-    <article class="panel">
-      <h2>Nueva entrega de ayudas sociales</h2>
-      <form class="form-grid" @submit.prevent="createEntrega">
-        <select v-model="form.id_beneficiario" required>
-          <option value="">Beneficiario</option>
-          <option v-for="person in beneficiarios" :key="person.id" :value="person.id">{{ person.nombre_completo }}</option>
-        </select>
-        <select v-model="form.id_municipio" required>
-          <option value="">Ciudad</option>
-          <option v-for="city in catalogos.ciudades.filter((item) => item.origen === 'ayudas_sociales')" :key="city.id" :value="city.id">{{ city.nombre }}</option>
-        </select>
-        <select v-model="form.id_colaborador" required>
-          <option value="">Colaborador</option>
-          <option v-for="worker in colaboradores" :key="worker.id_colaborador" :value="worker.id_colaborador">{{ worker.nombres }} {{ worker.apellidos }}</option>
-        </select>
-        <select v-model="form.id_tipo_ayuda" required>
-          <option value="">Tipo ayuda</option>
-          <option v-for="type in catalogos.tiposAyuda.filter((item) => item.origen === 'ayudas_sociales')" :key="type.id" :value="type.id">{{ type.nombre }}</option>
-        </select>
-        <input v-model="form.fecha_entrega" type="date" />
-        <input v-model.number="form.cantidad" type="number" min="1" placeholder="Cantidad" />
-        <input v-model="form.observacion" placeholder="Observacion" />
-        <button class="primary-button" :disabled="saving">{{ saving ? 'Guardando...' : 'Crear entrega' }}</button>
-      </form>
-    </article>
 
     <article class="panel">
       <div class="panel-title-row">

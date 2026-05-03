@@ -68,6 +68,117 @@ function buildAnalytics(rows) {
   };
 }
 
+function isCombinedSource(source) {
+  return source === 'ambas_bases' || source === 'unificado';
+}
+
+function shouldUnifyByIdentification(query = {}) {
+  const value = String(query.unifyByIdentification ?? 'true').toLowerCase();
+  return !['0', 'false', 'no', 'off'].includes(value);
+}
+
+function normalizedIdentification(value) {
+  return String(value || '').trim().replace(/[^a-z0-9]/gi, '').toLowerCase();
+}
+
+function dedupeRowsByIdentification(rows) {
+  const seen = new Set();
+
+  return rows.filter((row, index) => {
+    const identification = normalizedIdentification(row?.documento ?? row?.numero_documento ?? row?.cedula);
+    const key = identification || `__sin_identificacion_${index}`;
+    if (seen.has(key)) return false;
+    seen.add(key);
+    return true;
+  });
+}
+
+function compareValues(a, b) {
+  const aNumber = Number(a);
+  const bNumber = Number(b);
+  const bothNumeric = Number.isFinite(aNumber) && Number.isFinite(bNumber) && String(a ?? '').trim() !== '' && String(b ?? '').trim() !== '';
+
+  if (bothNumeric) return aNumber - bNumber;
+  return String(a ?? '').localeCompare(String(b ?? ''), 'es', { numeric: true, sensitivity: 'base' });
+}
+
+function sortRows(rows, field = 'id', direction = 'ASC') {
+  const dir = String(direction || 'ASC').toUpperCase() === 'DESC' ? -1 : 1;
+  return [...rows].sort((a, b) => dir * compareValues(a?.[field], b?.[field]));
+}
+
+function unifiedBeneficiarioAttempts(results) {
+  return results.map((result) => ({
+    source: result.source,
+    ok: result.ok,
+    total: result.total || 0,
+    error: result.error || null
+  }));
+}
+
+async function collectUnifiedBeneficiarios(req) {
+  let token = null;
+  try {
+    token = getSourceToken(req, 'new') || await getServiceToken('new');
+  } catch (_error) {
+    token = null;
+  }
+
+  const schemaPromise = token
+    ? getNewBeneficiarioSchema(token)
+    : Promise.reject(new Error('Token de la API nueva no disponible'));
+  const [oldRowsResult, newSchema] = await Promise.allSettled([
+    collectOldBeneficiarios(req.query),
+    schemaPromise
+  ]);
+
+  const results = [];
+  const rows = [];
+
+  if (oldRowsResult.status === 'fulfilled') {
+    rows.push(...oldRowsResult.value);
+    results.push({ source: 'old', ok: true, total: oldRowsResult.value.length });
+  } else {
+    results.push({ source: 'old', ok: false, error: oldRowsResult.reason?.message || 'Error consultando fuente antigua' });
+  }
+
+  if (token && newSchema.status === 'fulfilled') {
+    const newRowsResult = await Promise.allSettled([
+      collectNewBeneficiarios(req.query, token, newSchema.value)
+    ]);
+
+    if (newRowsResult[0].status === 'fulfilled') {
+      rows.push(...newRowsResult[0].value);
+      results.push({ source: 'new', ok: true, total: newRowsResult[0].value.length });
+    } else {
+      results.push({ source: 'new', ok: false, error: newRowsResult[0].reason?.message || 'Error consultando fuente nueva' });
+    }
+  } else {
+    results.push({ source: 'new', ok: false, error: newSchema.reason?.message || 'Error consultando fuente nueva' });
+  }
+
+  return {
+    rows: shouldUnifyByIdentification(req.query) ? dedupeRowsByIdentification(rows) : rows,
+    attempts: unifiedBeneficiarioAttempts(results)
+  };
+}
+
+function paginateRows(rows, page, limit) {
+  const total = rows.length;
+  const totalPages = Math.max(Math.ceil(total / limit), 1);
+  const currentPage = Math.min(Math.max(page, 1), totalPages);
+  const start = (currentPage - 1) * limit;
+  return {
+    rows: rows.slice(start, start + limit),
+    pagination: {
+      page: currentPage,
+      pageSize: limit,
+      totalPages,
+      total
+    }
+  };
+}
+
 function csvEscape(value) {
   const text = String(value ?? '');
   return /[",\r\n]/.test(text) ? `"${text.replace(/"/g, '""')}"` : text;
@@ -580,6 +691,28 @@ async function requestNewBeneficiarios(req, limit) {
 router.get('/', async (req, res, next) => {
   try {
     const { limit } = paginationFromQuery(req.query);
+    const requestedSource = String(req.query.source || '').toLowerCase();
+
+    if (isCombinedSource(requestedSource)) {
+      const unified = await collectUnifiedBeneficiarios(req);
+      const sorted = sortRows(unified.rows, req.query.sortField || 'id', req.query.sortDirection || 'ASC');
+      const paginated = paginateRows(sorted, paginationFromQuery(req.query).page, limit);
+      const includeStats = String(req.query.includeStats || '').toLowerCase() === '1' || String(req.query.includeStats || '').toLowerCase() === 'true';
+      const responseSource = requestedSource === 'unificado' ? 'unificado' : 'ambas_bases';
+
+      return res.json({
+        rows: paginated.rows,
+        total: paginated.pagination.total,
+        pagination: paginated.pagination,
+        source: responseSource,
+        requestedSource: responseSource,
+        fallbackUsed: unified.attempts.some((attempt) => !attempt.ok),
+        fallbackReason: unified.attempts.some((attempt) => !attempt.ok) ? 'partial_error' : null,
+        attempts: unified.attempts,
+        analytics: includeStats ? buildAnalytics(sorted) : null
+      });
+    }
+
     let rows = [];
     let total = 0;
     let lastError = null;
@@ -670,22 +803,29 @@ router.get('/', async (req, res, next) => {
 
 router.get('/export', async (req, res, next) => {
   try {
-    const primary = sourceFromOrigin(req.query.source, preferredSource(req));
+    const requestedSource = String(req.query.source || '').toLowerCase();
     let rows = [];
 
-    for (const source of sourcesForRequest(req, primary)) {
-      try {
-        if (source === 'old') {
-          rows = await collectOldBeneficiarios(req.query);
-        } else {
-          const token = getSourceToken(req, 'new') || await getServiceToken('new');
-          const schema = await getNewBeneficiarioSchema(token);
-          rows = await collectNewBeneficiariosForExport(req, token, schema);
-        }
+    if (isCombinedSource(requestedSource)) {
+      const unified = await collectUnifiedBeneficiarios(req);
+      rows = sortRows(unified.rows, req.query.sortField || 'id', req.query.sortDirection || 'ASC');
+    } else {
+      const primary = sourceFromOrigin(req.query.source, preferredSource(req));
 
-        if (rows.length > 0) break;
-      } catch (error) {
-        if (source === primary) throw error;
+      for (const source of sourcesForRequest(req, primary)) {
+        try {
+          if (source === 'old') {
+            rows = await collectOldBeneficiarios(req.query);
+          } else {
+            const token = getSourceToken(req, 'new') || await getServiceToken('new');
+            const schema = await getNewBeneficiarioSchema(token);
+            rows = await collectNewBeneficiariosForExport(req, token, schema);
+          }
+
+          if (rows.length > 0) break;
+        } catch (error) {
+          if (source === primary) throw error;
+        }
       }
     }
 

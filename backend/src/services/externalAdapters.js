@@ -236,6 +236,6 @@ export function toOldEntregaBody(body = {}) {
 }
 
 export function filterBySource(rows, source) {
-  if (!source) return rows;
+  if (!source || source === 'unificado' || source === 'ambas_bases') return rows;
   return rows.filter((row) => row.origen === source);
 }

@@ -8,7 +8,7 @@ const error = ref('');
 const exporting = ref(false);
 const activeSource = ref('');
 const fallbackUsed = ref(false);
-const filters = ref({ q: '', cityId: '', populationTypeId: '', source: '' });
+const filters = ref({ q: '', cityId: '', populationTypeId: '', source: '', unifyByIdentification: true });
 const showAdvancedFilters = ref(false);
 const sortField = ref('id');
 const sortDirection = ref('ASC');
@@ -55,7 +55,7 @@ async function loadRows(newPage = pagination.value.page) {
     const activeAdvancedFilters = advancedFilters.value.filter((filter) => filter.field && filter.value !== '');
     const data = await api.beneficiarios.list({
       ...filters.value,
-      page: pagination.value.page,
+      page: newPage,
       limit: 10,
       sortField: sortField.value,
       sortDirection: sortDirection.value,
@@ -132,6 +132,12 @@ function clearAdvancedFilters() {
   sortDirection.value = 'ASC';
 }
 
+function sourceLabel(source) {
+  if (source === 'new') return 'Nueva';
+  if (source === 'unificado' || source === 'ambas_bases') return 'Ambas bases';
+  return 'Antigua';
+}
+
 onMounted(async () => {
   await loadCatalogos();
   await loadRows();
@@ -155,26 +161,31 @@ onMounted(async () => {
         <h2>Consulta</h2>
         <span class="muted">
           {{ total }} registros
-          <template v-if="activeSource"> · usando {{ activeSource === 'new' ? 'Nueva' : 'Antigua' }}</template>
+          <template v-if="activeSource"> · usando {{ sourceLabel(activeSource) }}</template>
           <template v-if="fallbackUsed"> · respaldo</template>
         </span>
       </div>
       <div class="filter-grid">
-        <input v-model="filters.q" placeholder="Buscar" @keyup.enter="loadRows" />
-        <select v-model="filters.cityId">
+        <input v-model="filters.q" placeholder="Buscar" @keyup.enter="loadRows(1)" />
+        <select v-model="filters.cityId" @change="loadRows(1)">
           <option value="">Todas las ciudades</option>
           <option v-for="city in catalogos.ciudades" :key="city.id" :value="city.id">{{ city.nombre }}</option>
         </select>
-        <select v-model="filters.populationTypeId">
+        <select v-model="filters.populationTypeId" @change="loadRows(1)">
           <option value="">Tipo poblacion</option>
           <option v-for="type in catalogos.tiposPoblacion" :key="type.id" :value="type.id">{{ type.nombre }}</option>
         </select>
-        <select v-model="filters.source">
+        <select v-model="filters.source" @change="loadRows(1)">
           <option value="">Base por defecto</option>
           <option value="ayudas_sociales">Ayudas sociales</option>
           <option value="ong_operativa">ONG operativa</option>
+          <option value="ambas_bases">Ambas bases</option>
         </select>
-        <button class="primary-button compact" @click="loadRows">Filtrar</button>
+        <label v-if="filters.source === 'ambas_bases'" class="checkbox-filter">
+          <input v-model="filters.unifyByIdentification" type="checkbox" @change="loadRows(1)" />
+          Unificar por identificación
+        </label>
+        <button class="primary-button compact" @click="loadRows(1)">Filtrar</button>
         <button class="ghost-button compact" type="button" @click="exportCsv" :disabled="exporting">
           {{ exporting ? 'Exportando...' : 'Exportar CSV' }}
         </button>
@@ -265,6 +276,20 @@ onMounted(async () => {
 </template>
 
 <style scoped>
+.checkbox-filter {
+  align-items: center;
+  color: #4b5563;
+  display: flex;
+  gap: 0.55rem;
+  font-size: 0.9rem;
+  font-weight: 700;
+}
+
+.checkbox-filter input {
+  flex: 0 0 auto;
+  width: auto;
+}
+
 .pagination-row {
   display: flex;
   justify-content: space-between;

@@ -81,6 +81,10 @@ function normalizedIdentification(value) {
   return String(value || '').trim().replace(/[^a-z0-9]/gi, '').toLowerCase();
 }
 
+function normalizedFilterText(value) {
+  return String(value || '').normalize('NFD').replace(/[\u0300-\u036f]/g, '').trim().toLowerCase();
+}
+
 function dedupeRowsByIdentification(rows) {
   const seen = new Set();
 
@@ -221,7 +225,7 @@ async function exportNewRecordsPage(req, token, page, pageSize) {
 
 async function exportNewAdvancedPage(req, token, schema, page, pageSize) {
   const filters = advancedFiltersForSchema(schema, parseAdvancedFilters(req.query.advancedFilters));
-  const city = newCityFilterValue(req.query.cityId);
+  const city = newCityFilterValue(req.query);
 
   if (city && schema.columnNames.has('ciudad')) {
     filters.push({ field: 'ciudad', operator: '=', value: city });
@@ -243,7 +247,7 @@ async function exportNewAdvancedPage(req, token, schema, page, pageSize) {
 }
 
 async function exportNewCityPage(req, token, schema, page, pageSize) {
-  const city = newCityFilterValue(req.query.cityId);
+  const city = newCityFilterValue(req.query);
   if (!city || !schema.columnNames.has('ciudad')) return null;
 
   return requestExternal('new', '/search/execute', {
@@ -273,7 +277,7 @@ async function collectNewBeneficiariosForExport(req, token, schema) {
       rows.push(...newListPayload(payload).data.map(normalizeNewBeneficiario));
     }
 
-    return rows;
+    return rows.filter((row) => mainFiltersMatch(row, req.query));
   }
 
   const cityPayload = await exportNewCityPage(req, token, schema, 1, pageSize);
@@ -288,7 +292,7 @@ async function collectNewBeneficiariosForExport(req, token, schema) {
       rows.push(...newListPayload(payload).data.map(normalizeNewBeneficiario));
     }
 
-    return rows;
+    return rows.filter((row) => mainFiltersMatch(row, req.query));
   }
 
   const rows = [];
@@ -307,7 +311,7 @@ async function collectNewBeneficiariosForExport(req, token, schema) {
     rows.push(...(fallback.data || []));
   }
 
-  return rows;
+  return rows.filter((row) => mainFiltersMatch(row, req.query));
 }
 
 function oldPageQuery(query = {}, page = null, limit = null) {
@@ -339,13 +343,13 @@ async function collectOldBeneficiarios(query) {
     rows.push(...oldListPayload(payload).data.map(normalizeOldBeneficiario));
   }
 
-  return rows;
+  return rows.filter((row) => mainFiltersMatch(row, query));
 }
 
 async function collectNewBeneficiarios(query, token, schema) {
   const pageSize = 200;
   const rows = [];
-  const city = newCityFilterValue(query.cityId);
+  const city = newCityFilterValue(query);
 
   if (city && schema.columnNames.has('ciudad')) {
     const requestPage = async (page) => requestExternal('new', '/search/execute', {
@@ -364,11 +368,11 @@ async function collectNewBeneficiarios(query, token, schema) {
     const firstList = newListPayload(firstPayload);
     const total = Number(firstList.total || firstList.data.length || 0);
     const totalPages = Math.max(Math.ceil(total / pageSize), 1);
-    rows.push(...firstList.data.map(normalizeNewBeneficiario).filter((row) => locallyMatches(row, query.q)));
+    rows.push(...firstList.data.map(normalizeNewBeneficiario).filter((row) => mainFiltersMatch(row, query)));
 
     for (let page = 2; page <= totalPages; page += 1) {
       const payload = await requestPage(page);
-      rows.push(...newListPayload(payload).data.map(normalizeNewBeneficiario).filter((row) => locallyMatches(row, query.q)));
+      rows.push(...newListPayload(payload).data.map(normalizeNewBeneficiario).filter((row) => mainFiltersMatch(row, query)));
     }
 
     return rows;
@@ -389,11 +393,11 @@ async function collectNewBeneficiarios(query, token, schema) {
   const firstList = newListPayload(firstPayload);
   const total = Number(firstList.total || firstList.data.length || 0);
   const totalPages = Math.max(Math.ceil(total / pageSize), 1);
-  rows.push(...firstList.data.map(normalizeNewBeneficiario));
+  rows.push(...firstList.data.map(normalizeNewBeneficiario).filter((row) => mainFiltersMatch(row, query)));
 
   for (let page = 2; page <= totalPages; page += 1) {
     const payload = await requestPage(page);
-    rows.push(...newListPayload(payload).data.map(normalizeNewBeneficiario));
+    rows.push(...newListPayload(payload).data.map(normalizeNewBeneficiario).filter((row) => mainFiltersMatch(row, query)));
   }
 
   return rows;
@@ -514,16 +518,50 @@ function payloadFromRows(rows) {
   return { data: rows, pagination: { total: rows.length } };
 }
 
-function newCityFilterValue(value) {
+function newCityFilterValue(queryOrValue) {
+  const value = typeof queryOrValue === 'object' ? queryOrValue.cityId : queryOrValue;
+  const cityName = typeof queryOrValue === 'object' ? queryOrValue.cityName : '';
   const raw = rawExternalId(value);
-  if (!raw) return '';
-  return /^\d+$/.test(String(raw)) ? '' : String(raw);
+  if (raw && !/^\d+$/.test(String(raw))) return String(raw);
+  return String(cityName || '').trim();
 }
 
 function locallyMatches(row, q) {
-  const text = String(q || '').trim().toLowerCase();
+  const text = normalizedFilterText(q);
   if (!text) return true;
-  return Object.values(row || {}).some((value) => String(value || '').toLowerCase().includes(text));
+  return Object.values(row || {}).some((value) => normalizedFilterText(value).includes(text));
+}
+
+function cityMatches(row, query = {}) {
+  const cityName = normalizedFilterText(query.cityName);
+  const cityId = rawExternalId(query.cityId);
+  if (!cityName && !cityId) return true;
+  if (cityName) {
+    const rowCity = normalizedFilterText(row?.ciudad);
+    return Boolean(rowCity) && (rowCity === cityName || rowCity.includes(cityName) || cityName.includes(rowCity));
+  }
+
+  const rowCityId = rawExternalId(row?.municipio_id ?? row?.id_municipio ?? row?.cityId);
+  return rowCityId !== undefined && rowCityId !== null && String(rowCityId) === String(cityId);
+}
+
+function populationTypeMatches(row, query = {}) {
+  const populationTypeId = rawExternalId(query.populationTypeId);
+  const populationTypeName = normalizedFilterText(query.populationTypeName);
+  if (!populationTypeId && !populationTypeName) return true;
+
+  const rowPopulationTypeId = rawExternalId(row?.tipo_poblacion_id ?? row?.id_tipo_poblacion ?? row?.populationTypeId);
+  if (populationTypeId && rowPopulationTypeId !== undefined && rowPopulationTypeId !== null && rowPopulationTypeId !== '') {
+    return String(rowPopulationTypeId) === String(populationTypeId);
+  }
+
+  if (!populationTypeName) return false;
+  const rowPopulationType = normalizedFilterText(row?.tipo_poblacion);
+  return Boolean(rowPopulationType) && (rowPopulationType === populationTypeName || rowPopulationType.includes(populationTypeName) || populationTypeName.includes(rowPopulationType));
+}
+
+function mainFiltersMatch(row, query = {}) {
+  return locallyMatches(row, query.q) && cityMatches(row, query) && populationTypeMatches(row, query);
 }
 
 function parseAdvancedFilters(value) {
@@ -571,7 +609,7 @@ function orderByForSchema(schema, query) {
 
 async function searchNewAdvanced(req, token, schema, limit) {
   const filters = advancedFiltersForSchema(schema, parseAdvancedFilters(req.query.advancedFilters));
-  const city = newCityFilterValue(req.query.cityId);
+  const city = newCityFilterValue(req.query);
 
   if (city && schema.columnNames.has('ciudad')) {
     filters.push({ field: 'ciudad', operator: '=', value: city });
@@ -591,12 +629,12 @@ async function searchNewAdvanced(req, token, schema, limit) {
     }
   });
 
-  const rows = newListPayload(payload).data.filter((row) => locallyMatches(row, req.query.q));
+  const rows = newListPayload(payload).data.filter((row) => mainFiltersMatch(normalizeNewBeneficiario(row), req.query));
   return payloadFromRows(rows.slice(0, limit));
 }
 
 async function searchNewByCity(req, token, schema, limit) {
-  const city = newCityFilterValue(req.query.cityId);
+  const city = newCityFilterValue(req.query);
   if (!city || !schema.columnNames.has('ciudad')) return null;
 
   const payload = await requestExternal('new', '/search/execute', {
@@ -611,7 +649,7 @@ async function searchNewByCity(req, token, schema, limit) {
     }
   });
 
-  const rows = newListPayload(payload).data.filter((row) => locallyMatches(row, req.query.q));
+  const rows = newListPayload(payload).data.filter((row) => mainFiltersMatch(normalizeNewBeneficiario(row), req.query));
   return payloadFromRows(rows.slice(0, limit));
 }
 
@@ -641,7 +679,8 @@ async function searchNewByKnownFields(req, token, schema, limit) {
     });
   });
 
-  return payloadFromRows([...unique.values()].slice(0, limit));
+  const rows = [...unique.values()].filter((row) => mainFiltersMatch(normalizeNewBeneficiario(row), req.query));
+  return payloadFromRows(rows.slice(0, limit));
 }
 
 async function requestNewBeneficiariosWithToken(req, limit, token) {
@@ -652,7 +691,7 @@ async function requestNewBeneficiariosWithToken(req, limit, token) {
     if (advancedPayload) return advancedPayload;
   }
 
-  if (newCityFilterValue(req.query.cityId)) {
+  if (newCityFilterValue(req.query)) {
     const schema = await getNewBeneficiarioSchema(token);
     const cityPayload = await searchNewByCity(req, token, schema, limit);
     if (cityPayload) return cityPayload;
@@ -734,8 +773,8 @@ router.get('/', async (req, res, next) => {
             continue;
           }
 
-          rows = list.data.map(normalizeOldBeneficiario);
-          total = list.total;
+          rows = list.data.map(normalizeOldBeneficiario).filter((row) => mainFiltersMatch(row, req.query));
+          total = rows.length === list.data.length ? list.total : rows.length;
           usedSource = source;
           attempts.push({ source, ok: true, total });
           break;
@@ -757,8 +796,8 @@ router.get('/', async (req, res, next) => {
             continue;
           }
 
-          rows = list.data.map(normalizeNewBeneficiario);
-          total = list.total;
+          rows = list.data.map(normalizeNewBeneficiario).filter((row) => mainFiltersMatch(row, req.query));
+          total = rows.length === list.data.length ? list.total : rows.length;
           usedSource = source;
           attempts.push({ source, ok: true, total });
           break;
@@ -770,7 +809,7 @@ router.get('/', async (req, res, next) => {
       }
     }
 
-    const filtered = filterBySource(rows, req.query.source);
+    const filtered = filterBySource(rows, req.query.source).filter((row) => mainFiltersMatch(row, req.query));
     if (filtered.length === 0 && total === 0 && lastError && !emptyResult) throw lastError;
     const source = usedSource || emptyResult?.source || primary;
     const page = paginationFromQuery(req.query).page;

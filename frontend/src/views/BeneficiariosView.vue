@@ -49,12 +49,18 @@ async function loadCatalogos() {
   catalogos.value = { ciudades: ciudades.rows || [], tiposPoblacion: tiposPoblacion.rows || [] };
 }
 
+function selectedCatalogName(items, id) {
+  return (items || []).find((item) => String(item.id) === String(id))?.nombre || '';
+}
+
 async function loadRows(newPage = pagination.value.page) {
   error.value = '';
   try {
     const activeAdvancedFilters = advancedFilters.value.filter((filter) => filter.field && filter.value !== '');
     const data = await api.beneficiarios.list({
       ...filters.value,
+      cityName: selectedCatalogName(catalogos.value.ciudades, filters.value.cityId),
+      populationTypeName: selectedCatalogName(catalogos.value.tiposPoblacion, filters.value.populationTypeId),
       page: newPage,
       limit: 10,
       sortField: sortField.value,
@@ -85,6 +91,8 @@ async function exportCsv() {
     const activeAdvancedFilters = advancedFilters.value.filter((filter) => filter.field && filter.value !== '');
     const blob = await api.beneficiarios.exportCsv({
       ...filters.value,
+      cityName: selectedCatalogName(catalogos.value.ciudades, filters.value.cityId),
+      populationTypeName: selectedCatalogName(catalogos.value.tiposPoblacion, filters.value.populationTypeId),
       sortField: sortField.value,
       sortDirection: sortDirection.value,
       advancedFilters: activeAdvancedFilters.length ? JSON.stringify(activeAdvancedFilters) : ''

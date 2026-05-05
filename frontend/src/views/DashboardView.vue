@@ -10,21 +10,40 @@ const topCities = ref([]);
 const recentDeliveries = ref([]);
 const beneficiarios = ref([]);
 const analytics = ref({ byOrigin: [], byCity: [] });
+const activeSource = ref('');
+const fallbackUsed = ref(false);
 const catalogos = ref({ ciudades: [], tiposPoblacion: [], tiposAyuda: [] });
-const filters = ref({ q: '', cityId: '', populationTypeId: '', helpTypeId: '' });
+const filters = ref({
+  q: '',
+  cityId: '',
+  populationTypeId: '',
+  helpTypeId: '',
+  source: '',
+  unifyByIdentification: true
+});
 const pagination = ref({ page: 1, totalPages: 1, hasPrev: false, hasNext: false });
 
 const cards = [
-  ['total_beneficiarios', 'Beneficiarios'],
-  ['total_entregas', 'Entregas'],
-  ['total_colaboradores', 'Colaboradores'],
-  ['total_ciudades', 'Ciudades'],
-  ['total_donantes', 'Donantes'],
-  ['stock_inventario', 'Stock inventario']
+  ['total_beneficiarios', 'Beneficiarios', 'Personas registradas'],
+  ['total_entregas', 'Entregas', 'Ayudas trazadas'],
+  ['total_colaboradores', 'Colaboradores', 'Equipo activo'],
+  ['total_ciudades', 'Ciudades', 'Cobertura territorial'],
+  ['total_donantes', 'Donantes', 'Red de apoyo'],
+  ['stock_inventario', 'Stock inventario', 'Recursos disponibles']
 ];
 
 function resetPagination() {
   pagination.value = { page: 1, totalPages: 1, hasPrev: false, hasNext: false };
+}
+
+function selectedCatalogName(items, id) {
+  return (items || []).find((item) => String(item.id) === String(id))?.nombre || '';
+}
+
+function sourceLabel(source) {
+  if (source === 'new') return 'Nueva';
+  if (source === 'unificado' || source === 'ambas_bases') return 'Ambas bases';
+  return 'Antigua';
 }
 
 async function loadDashboard() {
@@ -53,10 +72,19 @@ async function searchBeneficiarios(newPage = null) {
     if (newPage !== null) {
       pagination.value.page = newPage;
     }
-    const currentFilters = { ...filters.value, page: pagination.value.page, limit: 10, includeStats: 1 };
+    const currentFilters = {
+      ...filters.value,
+      cityName: selectedCatalogName(catalogos.value.ciudades, filters.value.cityId),
+      populationTypeName: selectedCatalogName(catalogos.value.tiposPoblacion, filters.value.populationTypeId),
+      page: pagination.value.page,
+      limit: 10,
+      includeStats: 1
+    };
     const data = await api.beneficiarios.list(currentFilters);
     beneficiarios.value = data.rows || [];
     analytics.value = data.analytics || { byOrigin: [], byCity: [] };
+    activeSource.value = data.source || '';
+    fallbackUsed.value = Boolean(data.fallbackUsed);
     const currentPage = data.pagination?.page || pagination.value.page || 1;
     const totalPages = data.pagination?.totalPages || 1;
     pagination.value = {
@@ -114,6 +142,14 @@ onMounted(load);
       <button class="ghost-button" @click="load">Actualizar</button>
     </header>
 
+    <section class="insight-strip">
+      <div>
+        <span class="pulse-dot"></span>
+        <strong>Operacion conectada</strong>
+      </div>
+      <p>Datos consolidados para priorizar beneficiarios, entregas y recursos en tiempo real.</p>
+    </section>
+
     <p v-if="error" class="form-error">{{ error }}</p>
     <p v-if="loading" class="muted">Cargando informacion...</p>
 
@@ -121,6 +157,7 @@ onMounted(load);
       <article v-for="card in cards" :key="card[0]" class="metric-card">
         <span>{{ card[1] }}</span>
         <strong>{{ summary[card[0]] ?? 0 }}</strong>
+        <small>{{ card[2] }}</small>
       </article>
     </div>
 
@@ -145,7 +182,11 @@ onMounted(load);
     <article class="panel">
       <div class="panel-title-row">
         <h2>Consulta rapida de beneficiarios</h2>
-        <button class="primary-button compact" @click="applyFilters">Consultar</button>
+        <span class="muted">
+          {{ beneficiarios.length }} visibles
+          <template v-if="activeSource"> · usando {{ sourceLabel(activeSource) }}</template>
+          <template v-if="fallbackUsed"> · respaldo</template>
+        </span>
       </div>
 
       <div class="filter-grid">
@@ -162,6 +203,17 @@ onMounted(load);
           <option value="">Tipo ayuda</option>
           <option v-for="type in catalogos.tiposAyuda" :key="type.id" :value="type.id">{{ type.nombre }}</option>
         </select>
+        <select v-model="filters.source" @change="applyFilters">
+          <option value="">Base por defecto</option>
+          <option value="ayudas_sociales">Ayudas sociales</option>
+          <option value="ong_operativa">ONG operativa</option>
+          <option value="ambas_bases">Ambas bases</option>
+        </select>
+        <label v-if="filters.source === 'ambas_bases'" class="checkbox-filter">
+          <input v-model="filters.unifyByIdentification" type="checkbox" @change="applyFilters" />
+          Unificar por identificacion
+        </label>
+        <button class="primary-button compact" @click="applyFilters">Consultar</button>
       </div>
 
       <div class="table-wrap">
@@ -219,16 +271,30 @@ onMounted(load);
 </template>
 
 <style scoped>
+.checkbox-filter {
+  align-items: center;
+  color: var(--muted);
+  display: flex;
+  gap: 0.55rem;
+  font-size: 0.9rem;
+  font-weight: 700;
+}
+
+.checkbox-filter input {
+  flex: 0 0 auto;
+  width: auto;
+}
+
 .pagination-row {
   display: flex;
   justify-content: space-between;
   align-items: center;
-  padding: 1rem 0;
+  padding: 1rem 0 0;
 }
 
 .pagination-info {
   font-size: 0.875rem;
-  color: #6b7280;
+  color: var(--muted);
 }
 
 .pagination-buttons {
@@ -237,23 +303,23 @@ onMounted(load);
 }
 
 .pagination-btn {
-  padding: 0.5rem 1.25rem;
-  background: #0d9488;
-  color: white;
-  border: none;
-  border-radius: 6px;
+  padding: 0.55rem 1rem;
+  background: #fff;
+  color: var(--green-dark);
+  border: 1px solid rgba(20, 32, 27, 0.12);
+  border-radius: 8px;
   cursor: pointer;
   font-size: 0.875rem;
-  font-weight: 500;
+  font-weight: 800;
   transition: background 0.2s;
 }
 
 .pagination-btn:hover:not(:disabled) {
-  background: #0f766e;
+  background: rgba(23, 122, 91, 0.1);
 }
 
 .pagination-btn:disabled {
-  background: #9ca3af;
+  opacity: 0.45;
   cursor: not-allowed;
 }
 

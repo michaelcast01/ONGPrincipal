@@ -286,7 +286,7 @@ onMounted(async () => {
 <style scoped>
 .checkbox-filter {
   align-items: center;
-  color: #4b5563;
+  color: var(--muted);
   display: flex;
   gap: 0.55rem;
   font-size: 0.9rem;
@@ -302,12 +302,12 @@ onMounted(async () => {
   display: flex;
   justify-content: space-between;
   align-items: center;
-  padding: 1rem 0;
+  padding: 1rem 0 0;
 }
 
 .pagination-info {
   font-size: 0.875rem;
-  color: #6b7280;
+  color: var(--muted);
 }
 
 .pagination-buttons {
@@ -316,23 +316,23 @@ onMounted(async () => {
 }
 
 .pagination-btn {
-  padding: 0.5rem 1.25rem;
-  background: #0d9488;
-  color: white;
-  border: none;
-  border-radius: 6px;
+  padding: 0.55rem 1rem;
+  background: #fff;
+  color: var(--green-dark);
+  border: 1px solid rgba(20, 32, 27, 0.12);
+  border-radius: 8px;
   cursor: pointer;
   font-size: 0.875rem;
-  font-weight: 500;
+  font-weight: 800;
   transition: background 0.2s;
 }
 
 .pagination-btn:hover:not(:disabled) {
-  background: #0f766e;
+  background: rgba(23, 122, 91, 0.1);
 }
 
 .pagination-btn:disabled {
-  background: #9ca3af;
+  opacity: 0.45;
   cursor: not-allowed;
 }
 </style>

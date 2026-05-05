@@ -403,6 +403,29 @@ async function collectNewBeneficiarios(query, token, schema) {
   return rows;
 }
 
+async function collectAllRowsForSource(req, source) {
+  if (source === 'old') {
+    return collectOldBeneficiarios(req.query);
+  }
+
+  const userToken = getSourceToken(req, 'new');
+  let token = userToken;
+
+  if (!token) {
+    token = await getServiceToken('new');
+  }
+
+  try {
+    const schema = await getNewBeneficiarioSchema(token);
+    return await collectNewBeneficiarios(req.query, token, schema);
+  } catch (error) {
+    if (!userToken || ![401, 403].includes(Number(error.status))) throw error;
+    const serviceToken = await getServiceToken('new');
+    const schema = await getNewBeneficiarioSchema(serviceToken);
+    return collectNewBeneficiarios(req.query, serviceToken, schema);
+  }
+}
+
 async function collectBeneficiariosAnalytics(req, source) {
   if (source === 'old') {
     return buildAnalytics(await collectOldBeneficiarios(req.query));
@@ -730,13 +753,14 @@ async function requestNewBeneficiarios(req, limit) {
 router.get('/', async (req, res, next) => {
   try {
     const { limit } = paginationFromQuery(req.query);
+    const { page } = paginationFromQuery(req.query);
     const requestedSource = String(req.query.source || '').toLowerCase();
+    const includeStats = String(req.query.includeStats || '').toLowerCase() === '1' || String(req.query.includeStats || '').toLowerCase() === 'true';
 
     if (isCombinedSource(requestedSource)) {
       const unified = await collectUnifiedBeneficiarios(req);
       const sorted = sortRows(unified.rows, req.query.sortField || 'id', req.query.sortDirection || 'ASC');
-      const paginated = paginateRows(sorted, paginationFromQuery(req.query).page, limit);
-      const includeStats = String(req.query.includeStats || '').toLowerCase() === '1' || String(req.query.includeStats || '').toLowerCase() === 'true';
+      const paginated = paginateRows(sorted, page, limit);
       const responseSource = requestedSource === 'unificado' ? 'unificado' : 'ambas_bases';
 
       return res.json({
@@ -760,6 +784,55 @@ router.get('/', async (req, res, next) => {
     let fallbackReason = null;
     let emptyResult = null;
     const attempts = [];
+
+    if (includeStats) {
+      for (const source of sourcesForRequest(req, primary)) {
+        try {
+          const collectedRows = await collectAllRowsForSource(req, source);
+          if (collectedRows.length === 0) {
+            emptyResult = { source, rows: [], total: 0 };
+            attempts.push({ source, ok: true, total: 0 });
+            if (source === primary) fallbackReason = 'empty_results';
+            continue;
+          }
+
+          const sortedRows = sortRows(collectedRows, req.query.sortField || 'id', req.query.sortDirection || 'ASC');
+          const paginated = paginateRows(sortedRows, page, limit);
+          const responseSource = source;
+
+          attempts.push({ source, ok: true, total: sortedRows.length });
+          return res.json({
+            rows: paginated.rows,
+            total: paginated.pagination.total,
+            pagination: paginated.pagination,
+            source: responseSource,
+            requestedSource: primary,
+            fallbackUsed: responseSource !== primary,
+            fallbackReason: responseSource !== primary ? fallbackReason : null,
+            attempts,
+            analytics: buildAnalytics(sortedRows)
+          });
+        } catch (error) {
+          lastError = error;
+          attempts.push({ source, ok: false, status: error.status, error: error.message });
+          if (source === primary) fallbackReason = 'primary_error';
+        }
+      }
+
+      if (lastError && !emptyResult) throw lastError;
+
+      return res.json({
+        rows: [],
+        total: 0,
+        pagination: { page, pageSize: limit, totalPages: 1, total: 0 },
+        source: emptyResult?.source || primary,
+        requestedSource: primary,
+        fallbackUsed: (emptyResult?.source || primary) !== primary,
+        fallbackReason: (emptyResult?.source || primary) !== primary ? fallbackReason : null,
+        attempts,
+        analytics: buildAnalytics([])
+      });
+    }
 
     for (const source of sourcesForRequest(req, primary)) {
       if (source === 'old') {
@@ -812,17 +885,7 @@ router.get('/', async (req, res, next) => {
     const filtered = filterBySource(rows, req.query.source).filter((row) => mainFiltersMatch(row, req.query));
     if (filtered.length === 0 && total === 0 && lastError && !emptyResult) throw lastError;
     const source = usedSource || emptyResult?.source || primary;
-    const page = paginationFromQuery(req.query).page;
     const totalPages = Math.ceil(total / limit);
-    let analytics = null;
-
-    if (String(req.query.includeStats || '').toLowerCase() === '1' || String(req.query.includeStats || '').toLowerCase() === 'true') {
-      try {
-        analytics = await collectBeneficiariosAnalytics(req, source);
-      } catch (_error) {
-        analytics = null;
-      }
-    }
 
     res.json({
       rows: filtered,
@@ -833,7 +896,7 @@ router.get('/', async (req, res, next) => {
       fallbackUsed: source !== primary,
       fallbackReason: source !== primary ? fallbackReason : null,
       attempts,
-      analytics
+      analytics: null
     });
   } catch (error) {
     next(error);

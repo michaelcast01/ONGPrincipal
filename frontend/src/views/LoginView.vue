@@ -36,9 +36,15 @@ async function submit() {
         Consulta beneficiarios, ayudas, donaciones, inventario y misiones desde
         una API integrada sobre los sistemas existentes de la ONG.
       </p>
+      <div class="login-proof-grid" aria-label="Resumen operativo">
+        <span><strong>2</strong> bases integradas</span>
+        <span><strong>24/7</strong> consulta disponible</span>
+        <span><strong>1</strong> vista operativa</span>
+      </div>
     </section>
 
     <form class="login-card" @submit.prevent="submit">
+      <p class="eyebrow">Acceso seguro</p>
       <h2>Iniciar sesion</h2>
       <label>
         Usuario

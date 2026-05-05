@@ -128,7 +128,10 @@ const hasData = computed(() => props.data.length > 0);
 
 <template>
   <div class="chart-container">
-    <h3 class="chart-title">{{ title }}</h3>
+    <div class="chart-title-row">
+      <h3 class="chart-title">{{ title }}</h3>
+      <span class="chart-badge">{{ variant === 'bar' ? 'Top' : 'Mix' }}</span>
+    </div>
     <div v-if="hasData" class="chart-wrapper">
       <component
         :is="variant === 'bar' ? Bar : Pie"
@@ -147,11 +150,31 @@ const hasData = computed(() => props.data.length > 0);
 .chart-container {
   width: 100%;
   min-height: 300px;
+  border: 1px solid rgba(21, 35, 29, 0.08);
+  border-radius: 8px;
+  padding: 1rem;
+  background: linear-gradient(180deg, rgba(255, 255, 255, 0.76), rgba(247, 250, 244, 0.68));
+}
+
+.chart-title-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin: 0 0 0.75rem;
 }
 
 .chart-title {
-  margin: 0 0 0.75rem;
+  margin: 0;
   font-size: 1rem;
+}
+
+.chart-badge {
+  border-radius: 999px;
+  padding: 0.26rem 0.58rem;
+  background: rgba(31, 111, 74, 0.1);
+  color: #12472f;
+  font-size: 0.72rem;
+  font-weight: 800;
 }
 
 .chart-wrapper {
